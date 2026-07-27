@@ -23,7 +23,7 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK
         run: sdkmanager "platforms;android-34" "build-tools;35.0.0"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Run Android checks
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - name: Verify release metadata contract
