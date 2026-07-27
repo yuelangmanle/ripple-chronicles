@@ -48,8 +48,9 @@ jobs:
           EXPECTED_CERT_SHA256: 0396dd6f055a148d00013f3e227e8bc35d857bd668a2f75486e0fa7a3f58aa16
         run: |
           node scripts/check_release_consistency.cjs
-          apksigner verify --verbose --print-certs "$RELEASE_APK"
-          ACTUAL_CERT_SHA256=$(apksigner verify --print-certs "$RELEASE_APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print tolower($2)}')
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$RELEASE_APK"
+          ACTUAL_CERT_SHA256=$("$APKSIGNER" verify --print-certs "$RELEASE_APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print tolower($2)}')
           test "$ACTUAL_CERT_SHA256" = "$EXPECTED_CERT_SHA256"
       - name: Create checksum
         run: sha256sum app/build/outputs/apk/release/app-release.apk > app/build/outputs/apk/release/app-release.apk.sha256
