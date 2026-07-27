@@ -13,7 +13,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.48.1",
     "clsx": "^2.1.1",
-    "docx": "^9.1.1",
+    "docx": "^9.7.1",
     "file-saver": "^2.0.5",
     "framer-motion": "^12.4.10",
     "lucide-react": "^0.511.0",
