@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "check": "tsc -b --noEmit"
+    "check": "tsc -b --noEmit",
+    "encrypt:docs": "node scripts/encrypt_docs.cjs",
+    "release:check": "node scripts/check_release_consistency.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.1",

@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -17,6 +18,7 @@ import com.dlovel.plankton.data.LocalAppStore
 import com.dlovel.plankton.service.CacheService
 import com.dlovel.plankton.ui.screens.*
 
+@ExperimentalCamera2Interop
 @Composable
 fun MainScreen() {
     val navController = rememberNavController()
@@ -60,7 +62,7 @@ fun MainScreen() {
                                 popUpTo("home") { saveState = true }
                             }
                         },
-                        icon = { Icon(icon, contentDescription = null) },
+                    icon = { Icon(icon, contentDescription = label) },
                         label = { Text(label) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = MaterialTheme.colorScheme.primary,

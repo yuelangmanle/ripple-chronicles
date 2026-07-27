@@ -11,4 +11,16 @@ class ReleaseLinksTest {
             ReleaseLinks.RELEASES_URL
         )
     }
+
+    @Test
+    fun projectAndLatestReleaseEndpointsPointToThePublicRepository() {
+        assertEquals(
+            "https://github.com/yuelangmanle/ripple-chronicles",
+            ReleaseLinks.PROJECT_URL
+        )
+        assertEquals(
+            "https://api.github.com/repos/yuelangmanle/ripple-chronicles/releases/latest",
+            ReleaseLinks.LATEST_RELEASE_API_URL
+        )
+    }
 }

@@ -108,7 +108,7 @@ fun TaxonomyScreen() {
                 IconButton(onClick = { viewMode = if (viewMode == "list") "map" else "list" }) {
                     Icon(
                         imageVector = if (viewMode == "list") Icons.Filled.Share else Icons.Filled.List,
-                        contentDescription = null,
+                        contentDescription = if (viewMode == "list") "切换为分类树" else "切换为列表",
                         tint = Color.White
                     )
                 }
@@ -189,6 +189,17 @@ fun TaxonomyScreen() {
                 }
             }
         } else {
+            SectionHeader(title = "分类树")
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("搜索并定位物种节点...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "搜索物种") },
+                shape = RoundedCornerShape(14.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
             Box(modifier = Modifier.fillMaxSize()) {
                 TaxonomyMindMap(speciesList)
             }

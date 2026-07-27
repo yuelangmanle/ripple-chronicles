@@ -10,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -24,6 +25,10 @@ import com.dlovel.plankton.data.AppSettings
 import com.dlovel.plankton.data.LocalAppStore
 import com.dlovel.plankton.data.StorageMode
 import com.dlovel.plankton.service.CacheService
+import com.dlovel.plankton.service.DocumentCrypto
+import com.dlovel.plankton.service.GithubReleaseService
+import com.dlovel.plankton.service.ReleaseInfo
+import com.dlovel.plankton.service.SupabaseService
 import com.dlovel.plankton.ui.components.GradientHeaderCard
 import com.dlovel.plankton.ui.components.SectionHeader
 import com.dlovel.plankton.ui.components.ScreenEnter
@@ -31,37 +36,49 @@ import com.dlovel.plankton.ui.components.SoftCard
 import com.dlovel.plankton.util.ReleaseLinks
 import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 
-@OptIn(ExperimentalCoilApi::class)
+@OptIn(ExperimentalCoilApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val state by LocalAppStore.state.collectAsState()
     val settings = state.settings
     val snackbarHostState = remember { SnackbarHostState() }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var homeName by remember { mutableStateOf(sanitizeSurname(settings.homeUserName)) }
+    var docsUnlocked by remember { mutableStateOf(false) }
     var pendingDoc by remember { mutableStateOf<DocType?>(null) }
     var showDocDialog by remember { mutableStateOf(false) }
+    var showDocPasswordDialog by remember { mutableStateOf(false) }
+    var docPassword by remember { mutableStateOf("") }
+    var projectSpec by remember { mutableStateOf<String?>(null) }
+    var devProgress by remember { mutableStateOf<String?>(null) }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var latestRelease by remember { mutableStateOf<ReleaseInfo?>(null) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                docsUnlocked = false
+                projectSpec = null
+                devProgress = null
+                showDocDialog = false
+                showDocPasswordDialog = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val rawChangelog = remember {
         context.resources.openRawResource(com.dlovel.plankton.R.raw.changelog)
             .bufferedReader()
             .use { it.readText().trim() }
     }
     val changelog = remember(rawChangelog) { formatChangelog(rawChangelog) }
-    val rawProjectSpec = remember {
-        context.resources.openRawResource(com.dlovel.plankton.R.raw.project_spec)
-            .bufferedReader()
-            .use { it.readText().trim() }
-    }
-    val rawDevProgress = remember {
-        context.resources.openRawResource(com.dlovel.plankton.R.raw.dev_progress)
-            .bufferedReader()
-            .use { it.readText().trim() }
-    }
-    val projectSpec = remember(rawProjectSpec) { formatDoc(rawProjectSpec) }
-    val devProgress = remember(rawDevProgress) { formatDoc(rawDevProgress) }
     val versionName = remember {
         try {
             if (Build.VERSION.SDK_INT >= 33) {
@@ -93,7 +110,12 @@ fun SettingsScreen() {
     }
     val openDoc: (DocType) -> Unit = { docType ->
         pendingDoc = docType
-        showDocDialog = true
+        if (docsUnlocked) {
+            showDocDialog = true
+        } else {
+            docPassword = ""
+            showDocPasswordDialog = true
+        }
     }
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -131,18 +153,48 @@ fun SettingsScreen() {
             Text("QQ: 3335196397")
             Text("版本: $versionName")
             Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = {
-                    try {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(ReleaseLinks.RELEASES_URL))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        if (checkingUpdate) return@OutlinedButton
+                        checkingUpdate = true
+                        scope.launch {
+                            runCatching { GithubReleaseService.fetchLatestRelease() }
+                                .onSuccess {
+                                    latestRelease = it
+                                    showUpdateDialog = true
+                                }
+                                .onFailure {
+                                    snackbarHostState.showSnackbar(
+                                        "检查更新失败：" + (it.message ?: "网络不可用")
+                                    )
+                                }
+                            checkingUpdate = false
+                        }
+                    }
+                ) {
+                    if (checkingUpdate) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
                         )
-                    } catch (_: ActivityNotFoundException) {
-                        scope.launch { snackbarHostState.showSnackbar("无法打开 GitHub 发布页") }
+                    } else {
+                        Text("检查更新")
                     }
                 }
-            ) {
-                Text("检查更新")
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(ReleaseLinks.PROJECT_URL))
+                            )
+                        } catch (_: ActivityNotFoundException) {
+                            scope.launch { snackbarHostState.showSnackbar("无法打开 GitHub 项目主页") }
+                        }
+                    }
+                ) {
+                    Text("GitHub 项目")
+                }
             }
         }
 
@@ -313,6 +365,85 @@ fun SettingsScreen() {
         }
 
         Spacer(modifier = Modifier.height(20.dp))
+        SectionHeader(title = "隐私与同步")
+        Spacer(modifier = Modifier.height(12.dp))
+        SoftCard(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                if (SupabaseService.isConfigured) "云端配置已就绪；同步仅在完成账号认证后启用。"
+                else "云端同步尚未配置；当前数据始终只保存在本地。",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "待同步操作：${state.pendingSyncOperations.count { it.conflictState == "PENDING" }}，冲突：${state.pendingSyncOperations.count { it.conflictState == "CONFLICT" }}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text("匿名本地使用统计", style = MaterialTheme.typography.bodySmall)
+                Spacer(modifier = Modifier.weight(1f))
+                Switch(
+                    checked = settings.telemetryEnabled,
+                    onCheckedChange = { enabled ->
+                        updateSettings(context, scope, settings.copy(telemetryEnabled = enabled))
+                    }
+                )
+            }
+            if (settings.telemetryEnabled) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "仅保存在本机：拍摄 ${state.usageMetrics.captures}，导入 ${state.usageMetrics.imports}，导出 ${state.usageMetrics.exports}。不记录图片、位置或物种数据。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = { scope.launch { LocalAppStore.clearUsage(context) } }) {
+                    Text("清除本地统计")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        SectionHeader(title = "视觉与动效")
+        Spacer(modifier = Modifier.height(12.dp))
+        SoftCard(modifier = Modifier.fillMaxWidth()) {
+            Text("主题", style = MaterialTheme.typography.bodySmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("SYSTEM" to "跟随系统", "LIGHT" to "浅色", "DARK" to "深色").forEach { (value, label) ->
+                    FilterChip(
+                        selected = settings.themeMode == value,
+                        onClick = {
+                            updateSettings(context, scope, settings.copy(themeMode = value))
+                        },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("动效强度", style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = settings.animationScale,
+                onValueChange = { value ->
+                    updateSettings(context, scope, settings.copy(animationScale = value))
+                },
+                valueRange = 0f..1.5f,
+                steps = 2
+            )
+            Text(
+                when {
+                    settings.animationScale <= 0.05f -> "关闭"
+                    settings.animationScale < 0.75f -> "减少"
+                    settings.animationScale > 1.25f -> "增强"
+                    else -> "标准"
+                },
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
         SectionHeader(title = "缓存管理")
         Spacer(modifier = Modifier.height(12.dp))
         SoftCard(modifier = Modifier.fillMaxWidth()) {
@@ -378,9 +509,126 @@ fun SettingsScreen() {
         )
     }
 
+    if (showDocPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = { showDocPasswordDialog = false },
+            title = { Text("验证文档密码") },
+            text = {
+                OutlinedTextField(
+                    value = docPassword,
+                    onValueChange = { docPassword = it },
+                    label = { Text("请输入密码") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        runCatching {
+                            DocumentCrypto.decrypt(
+                                context,
+                                com.dlovel.plankton.R.raw.project_spec,
+                                docPassword
+                            ) to DocumentCrypto.decrypt(
+                                context,
+                                com.dlovel.plankton.R.raw.dev_progress,
+                                docPassword
+                            )
+                        }.onSuccess { (spec, progress) ->
+                            projectSpec = formatDoc(spec)
+                            devProgress = formatDoc(progress)
+                            docsUnlocked = true
+                            showDocPasswordDialog = false
+                            showDocDialog = true
+                        }.onFailure {
+                            scope.launch { snackbarHostState.showSnackbar("密码错误，无法解密项目文档") }
+                        }
+                    }
+                ) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDocPasswordDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    if (showUpdateDialog && latestRelease != null) {
+        val release = latestRelease!!
+        val hasNewVersion = isNewerVersion(release.tagName, versionName)
+        AlertDialog(
+            onDismissRequest = { showUpdateDialog = false },
+            title = { Text(if (hasNewVersion) "发现新版本" else "当前已是最新版本") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = release.title + "（" + release.tagName + "）",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = if (release.notes.isBlank()) "本次发布没有填写更新说明。" else release.notes,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (release.downloadUrl == null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "该版本暂未上传 APK。",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (release.downloadUrl != null) {
+                    Button(
+                        onClick = {
+                            runCatching {
+                                GithubReleaseService.enqueueApkDownload(context, release)
+                            }.onSuccess {
+                                showUpdateDialog = false
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "已开始下载，完成后请点击系统通知安装"
+                                    )
+                                }
+                            }.onFailure {
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "下载失败：" + (it.message ?: "未知错误")
+                                    )
+                                }
+                            }
+                        }
+                    ) {
+                        Text("下载更新")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUpdateDialog = false }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
+
     if (showDocDialog && pendingDoc != null) {
         val title = if (pendingDoc == DocType.PROJECT_SPEC) "项目说明书" else "开发进展书"
-        val content = if (pendingDoc == DocType.PROJECT_SPEC) projectSpec else devProgress
+        val content = if (pendingDoc == DocType.PROJECT_SPEC) {
+            projectSpec.orEmpty()
+        } else {
+            devProgress.orEmpty()
+        }
         Dialog(onDismissRequest = { showDocDialog = false }) {
             Surface(shape = RoundedCornerShape(16.dp)) {
                 Column(
@@ -436,6 +684,24 @@ private fun sanitizeSurname(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isEmpty()) return ""
     return trimmed.removeSuffix("研究员").trim()
+}
+
+private fun isNewerVersion(latest: String, current: String): Boolean {
+    fun parse(value: String): List<Int> {
+        return value.removePrefix("v")
+            .split(".")
+            .map { it.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
+    }
+
+    val latestParts = parse(latest)
+    val currentParts = parse(current)
+    val size = maxOf(latestParts.size, currentParts.size)
+    for (index in 0 until size) {
+        val latestPart = latestParts.getOrElse(index) { 0 }
+        val currentPart = currentParts.getOrElse(index) { 0 }
+        if (latestPart != currentPart) return latestPart > currentPart
+    }
+    return false
 }
 
 private enum class DocType {

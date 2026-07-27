@@ -7,6 +7,15 @@ create table if not exists datasets (
     id uuid default uuid_generate_v4() primary key,
     name text not null,
     description text,
+    sampling_site text,
+    latitude double precision,
+    longitude double precision,
+    sampled_at timestamp with time zone,
+    water_depth_meters double precision,
+    water_temperature_celsius double precision,
+    ph double precision,
+    salinity_psu double precision,
+    sample_code text,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -31,6 +40,11 @@ create table if not exists plankton_images (
     species_id uuid references species(id) on delete set null,
     image_url text not null,
     custom_name text,
+    is_favorite boolean not null default false,
+    identification_confidence smallint check (identification_confidence between 0 and 100),
+    review_status text not null default 'UNREVIEWED' check (review_status in ('UNREVIEWED', 'CONFIRMED', 'REJECTED')),
+    review_note text,
+    reviewed_at timestamp with time zone,
     metadata jsonb default '{}'::jsonb,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );

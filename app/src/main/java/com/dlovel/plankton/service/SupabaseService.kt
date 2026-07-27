@@ -11,6 +11,9 @@ import io.github.jan.supabase.storage.Storage
  * are explicitly used.
  */
 object SupabaseService {
+    val isConfigured: Boolean
+        get() = BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank()
+
     val client = createSupabaseClient(
         supabaseUrl = BuildConfig.SUPABASE_URL,
         supabaseKey = BuildConfig.SUPABASE_ANON_KEY

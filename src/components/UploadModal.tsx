@@ -103,6 +103,8 @@ const UploadModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
           species_id: item.speciesId,
           image_url: publicUrl,
           custom_name: item.file.name,
+          is_favorite: false,
+          review_status: 'UNREVIEWED',
         });
 
         if (dbError) throw dbError;

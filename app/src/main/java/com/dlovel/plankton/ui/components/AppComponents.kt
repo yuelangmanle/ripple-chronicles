@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dlovel.plankton.ui.theme.LocalMotionScale
 
 @Composable
 fun GradientHeaderCard(
@@ -160,14 +161,15 @@ fun ScreenEnter(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val motionScale = LocalMotionScale.current
     var visible by remember { mutableStateOf(false) }
-    val enter = remember {
-        fadeIn(tween(240)) + slideInVertically(initialOffsetY = { it / 10 })
+    val enter = remember(motionScale) {
+        fadeIn(tween((240 * motionScale).toInt())) + slideInVertically(initialOffsetY = { it / 10 })
     }
     LaunchedEffect(Unit) {
         visible = true
     }
-    AnimatedVisibility(visible = visible, enter = enter, exit = fadeOut(tween(140))) {
+    AnimatedVisibility(visible = visible, enter = enter, exit = fadeOut(tween((140 * motionScale).toInt()))) {
         Column(modifier = modifier, content = content)
     }
 }

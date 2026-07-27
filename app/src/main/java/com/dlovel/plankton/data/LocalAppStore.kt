@@ -2,6 +2,8 @@
 
 import android.content.Context
 import androidx.annotation.RawRes
+import androidx.annotation.VisibleForTesting
+import androidx.core.util.AtomicFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +18,7 @@ import java.util.UUID
 
 object LocalAppStore {
     private const val DATA_FILE = "app_state.json"
+    private const val CURRENT_SCHEMA_VERSION = 2
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -27,14 +30,8 @@ object LocalAppStore {
 
     suspend fun load(context: Context) {
         val file = File(context.filesDir, DATA_FILE)
-        val loaded = withContext(Dispatchers.IO) {
-            if (file.exists()) {
-                runCatching { json.decodeFromString(AppState.serializer(), file.readText()) }.getOrNull()
-            } else {
-                null
-            }
-        }
-        val base = loaded ?: AppState()
+        val loaded = readPersistedState(file)
+        val base = migrate(loaded ?: AppState())
         val builtIn = loadBuiltInSpecies(context, com.dlovel.plankton.R.raw.species_plankton)
         val builtInIds = builtIn.map { it.id }.toSet()
         val builtInKeys = builtIn.map { speciesKey(it) }.toSet()
@@ -55,7 +52,10 @@ object LocalAppStore {
                     species
                 }
             }
-        val withSpecies = base.copy(species = normalizedSpecies)
+        val withSpecies = base.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
+            species = normalizedSpecies
+        )
         _state.value = withSpecies
         if (!file.exists() || withSpecies != base) {
             save(context, withSpecies)
@@ -71,11 +71,17 @@ object LocalAppStore {
         }
     }
 
-    suspend fun addDataset(context: Context, name: String, description: String): Dataset {
+    suspend fun addDataset(
+        context: Context,
+        name: String,
+        description: String,
+        metadata: SampleMetadata = SampleMetadata()
+    ): Dataset {
         val dataset = Dataset(
             id = UUID.randomUUID().toString(),
             name = name,
             description = description,
+            metadata = metadata,
             created_at = System.currentTimeMillis()
         )
         update(context) { it.copy(datasets = it.datasets + dataset) }
@@ -96,15 +102,11 @@ object LocalAppStore {
     }
 
     suspend fun deleteImage(context: Context, imageId: String) {
-        update(context) { it.copy(images = it.images.filterNot { img -> img.id == imageId }) }
+        update(context) { deleteImageFromState(it, imageId) }
     }
 
     suspend fun deleteDataset(context: Context, datasetId: String) {
-        update(context) {
-            val remainingDatasets = it.datasets.filterNot { ds -> ds.id == datasetId }
-            val remainingImages = it.images.filterNot { img -> img.dataset_id == datasetId }
-            it.copy(datasets = remainingDatasets, images = remainingImages)
-        }
+        update(context) { deleteDatasetFromState(it, datasetId) }
     }
 
     suspend fun addSpecies(context: Context, newSpecies: List<Species>) {
@@ -136,9 +138,91 @@ object LocalAppStore {
         update(context) { it.copy(settings = settings) }
     }
 
+    suspend fun recordUsage(context: Context, event: UsageEvent) {
+        update(context) { current ->
+            if (!current.settings.telemetryEnabled) return@update current
+            val metrics = current.usageMetrics
+            val next = when (event) {
+                UsageEvent.CAPTURE -> metrics.copy(captures = metrics.captures + 1)
+                UsageEvent.IMPORT -> metrics.copy(imports = metrics.imports + 1)
+                UsageEvent.EXPORT -> metrics.copy(exports = metrics.exports + 1)
+            }.copy(updatedAt = System.currentTimeMillis())
+            current.copy(usageMetrics = next)
+        }
+    }
+
+    suspend fun clearUsage(context: Context) {
+        update(context) { it.copy(usageMetrics = LocalUsageMetrics()) }
+    }
+
+    suspend fun enqueueSyncOperation(context: Context, operation: SyncQueueOperation) {
+        update(context) { current ->
+            current.copy(pendingSyncOperations = (current.pendingSyncOperations + operation).takeLast(200))
+        }
+    }
+
+    suspend fun clearCompletedSyncOperations(context: Context) {
+        update(context) { current ->
+            current.copy(
+                pendingSyncOperations = current.pendingSyncOperations.filter {
+                    it.conflictState == "PENDING" || it.conflictState == "CONFLICT"
+                }
+            )
+        }
+    }
+
     private suspend fun save(context: Context, state: AppState) = withContext(Dispatchers.IO) {
         val file = File(context.filesDir, DATA_FILE)
-        file.writeText(json.encodeToString(AppState.serializer(), state))
+        val atomicFile = AtomicFile(file)
+        val stream = atomicFile.startWrite()
+        try {
+            stream.write(json.encodeToString(AppState.serializer(), state).toByteArray(Charsets.UTF_8))
+            stream.fd.sync()
+            atomicFile.finishWrite(stream)
+        } catch (error: Exception) {
+            atomicFile.failWrite(stream)
+            throw error
+        }
+    }
+
+    private suspend fun readPersistedState(file: File): AppState? = withContext(Dispatchers.IO) {
+        val atomicFile = AtomicFile(file)
+        val mainState = runCatching {
+            atomicFile.openRead().bufferedReader().use { reader ->
+                json.decodeFromString(AppState.serializer(), reader.readText())
+            }
+        }.getOrNull()
+        if (mainState != null) return@withContext mainState
+
+        val backup = File(file.parentFile, file.name + ".bak")
+        runCatching {
+            backup.bufferedReader().use { reader ->
+                json.decodeFromString(AppState.serializer(), reader.readText())
+            }
+        }.getOrNull()
+    }
+
+    @VisibleForTesting
+    internal fun deleteImageFromState(state: AppState, imageId: String): AppState {
+        return state.copy(images = state.images.filterNot { image -> image.id == imageId })
+    }
+
+    @VisibleForTesting
+    internal fun deleteDatasetFromState(state: AppState, datasetId: String): AppState {
+        return state.copy(
+            datasets = state.datasets.filterNot { dataset -> dataset.id == datasetId },
+            images = state.images.filterNot { image -> image.dataset_id == datasetId }
+        )
+    }
+
+    @VisibleForTesting
+    internal fun migrateForTesting(state: AppState): AppState = migrate(state)
+
+    private fun migrate(state: AppState): AppState {
+        return when {
+            state.schemaVersion >= CURRENT_SCHEMA_VERSION -> state
+            else -> state.copy(schemaVersion = CURRENT_SCHEMA_VERSION)
+        }
     }
 
     private suspend fun loadBuiltInSpecies(context: Context, @RawRes resId: Int): List<Species> {

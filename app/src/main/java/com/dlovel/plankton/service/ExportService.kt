@@ -37,7 +37,13 @@ import kotlin.math.min
 object ExportService {
     data class ExportItem(
         val source: String,
-        val name: String
+        val name: String,
+        val speciesName: String? = null,
+        val speciesLatin: String? = null,
+        val confidence: Int? = null,
+        val reviewStatus: String = "UNREVIEWED",
+        val reviewNote: String? = null,
+        val createdAt: Long? = null
     )
 
     data class ExportResult(
@@ -56,10 +62,11 @@ object ExportService {
         context: Context,
         items: List<ExportItem>,
         fileName: String = "鉴定报告.docx",
-        quality: Int = 85
+        quality: Int = 85,
+        metadataSummary: String? = null
     ): ExportResult = withContext(Dispatchers.IO) {
         try {
-            val document = buildReportDocument(context, items, quality)
+            val document = buildReportDocument(context, items, quality, metadataSummary)
             val output = ByteArrayOutputStream()
             document.write(output)
             document.close()
@@ -75,10 +82,11 @@ object ExportService {
         context: Context,
         items: List<ExportItem>,
         targetUri: Uri,
-        quality: Int = 85
+        quality: Int = 85,
+        metadataSummary: String? = null
     ): ExportResult = withContext(Dispatchers.IO) {
         try {
-            val document = buildReportDocument(context, items, quality)
+            val document = buildReportDocument(context, items, quality, metadataSummary)
             val stream = context.contentResolver.openOutputStream(targetUri) ?: return@withContext ExportResult(
                 null,
                 "鉴定报告.docx",
@@ -308,9 +316,26 @@ object ExportService {
     private fun buildReportDocument(
         context: Context,
         items: List<ExportItem>,
-        quality: Int
+        quality: Int,
+        metadataSummary: String?
     ): XWPFDocument {
         val document = XWPFDocument()
+        val title = document.createParagraph()
+        title.alignment = ParagraphAlignment.CENTER
+        title.createRun().apply {
+            fontFamily = "宋体"
+            fontSize = 16
+            isBold = true
+            setText("溯澜录鉴定报告")
+        }
+        if (!metadataSummary.isNullOrBlank()) {
+            val metadataParagraph = document.createParagraph()
+            metadataParagraph.createRun().apply {
+                fontFamily = "宋体"
+                fontSize = 10
+                setText(metadataSummary)
+            }
+        }
         val table = document.createTable(1, 2)
         configureTable(table)
         val pairs = items.chunked(2)
@@ -353,7 +378,16 @@ object ExportService {
                 val run = paragraph.createRun()
                 run.fontFamily = "宋体"
                 run.fontSize = 11
-                run.setText(item.name)
+                val status = when (item.reviewStatus) {
+                    "CONFIRMED" -> "已确认"
+                    "REJECTED" -> "已驳回"
+                    else -> "待复核"
+                }
+                val species = item.speciesName?.takeIf { it.isNotBlank() } ?: "未关联物种"
+                val latin = item.speciesLatin?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                val confidence = item.confidence?.let { "，置信度 $it%" }.orEmpty()
+                val note = item.reviewNote?.takeIf { it.isNotBlank() }?.let { "，备注：$it" }.orEmpty()
+                run.setText("${item.name}\n$species$latin\n复核：$status$confidence$note")
             }
         }
         return document

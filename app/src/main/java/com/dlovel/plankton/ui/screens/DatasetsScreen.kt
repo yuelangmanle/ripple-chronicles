@@ -7,6 +7,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
@@ -15,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.dlovel.plankton.data.Dataset
 import com.dlovel.plankton.data.LocalAppStore
+import com.dlovel.plankton.data.SampleMetadata
+import com.dlovel.plankton.data.UsageEvent
 import com.dlovel.plankton.service.DatasetTransferService
 import com.dlovel.plankton.service.StorageManager
 import com.dlovel.plankton.ui.components.EmptyStateCard
@@ -36,10 +40,26 @@ fun DatasetsScreen() {
     var showAddDialog by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var newDesc by remember { mutableStateOf("") }
+    var samplingSite by remember { mutableStateOf("") }
+    var sampleCode by remember { mutableStateOf("") }
+    var sampledAt by remember { mutableStateOf("") }
+    var latitude by remember { mutableStateOf("") }
+    var longitude by remember { mutableStateOf("") }
+    var waterDepth by remember { mutableStateOf("") }
+    var waterTemperature by remember { mutableStateOf("") }
+    var ph by remember { mutableStateOf("") }
+    var salinity by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<Dataset?>(null) }
     var backupTarget by remember { mutableStateOf<Dataset?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
+    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var importPreview by remember { mutableStateOf<DatasetTransferService.BackupPreview?>(null) }
+    var importConflictStrategy by remember {
+        mutableStateOf(DatasetTransferService.ImportConflictStrategy.RENAME)
+    }
+    var showImportPreview by remember { mutableStateOf(false) }
+    var importProgress by remember { mutableStateOf<DatasetTransferService.TransferProgress?>(null) }
     val datasets = state.datasets.sortedByDescending { it.created_at }
     val speciesMap = remember(state.species) { state.species.associateBy { it.id } }
 
@@ -88,27 +108,16 @@ fun DatasetsScreen() {
                 return@launch
             }
             importing = true
-            val result = DatasetTransferService.importDatasetFromUri(
-                context = context,
-                uri = uri,
-                settings = state.settings,
-                speciesList = state.species,
-                nameResolver = { resolveDatasetName(it) }
-            )
+            val previewResult = DatasetTransferService.previewBackupFromUri(context, uri)
             importing = false
-            if (result.error != null) {
-                snackbarHostState.showSnackbar(result.error)
+            if (previewResult.error != null || previewResult.preview == null) {
+                snackbarHostState.showSnackbar(previewResult.error ?: "无法读取备份清单")
                 return@launch
             }
-            val dataset = result.dataset ?: return@launch
-            val images = result.images
-            LocalAppStore.update(context) {
-                it.copy(
-                    datasets = it.datasets + dataset,
-                    images = it.images + images
-                )
-            }
-            snackbarHostState.showSnackbar("已导入 ${dataset.name}，图片 ${result.importedCount} 张")
+            importUri = uri
+            importPreview = previewResult.preview
+            importConflictStrategy = DatasetTransferService.ImportConflictStrategy.RENAME
+            showImportPreview = true
         }
     }
 
@@ -118,7 +127,7 @@ fun DatasetsScreen() {
                 onClick = { showAddDialog = true },
                 containerColor = MaterialTheme.colorScheme.primary
             ) {
-                Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
+                Icon(Icons.Default.Add, contentDescription = "新建数据集", tint = MaterialTheme.colorScheme.onPrimary)
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -143,8 +152,19 @@ fun DatasetsScreen() {
                     onClick = { importLauncher.launch(arrayOf("application/zip")) },
                     enabled = !importing
                 ) {
-                    Text(if (importing) "导入中..." else "导入备份")
+                    Text(if (importing) "读取备份..." else "导入备份")
                 }
+            }
+            importProgress?.let { progress ->
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = if (progress.total == 0) 0f else progress.processed.toFloat() / progress.total,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "正在处理 ${progress.processed}/${progress.total}：${progress.currentItem}",
+                    style = MaterialTheme.typography.labelSmall
+                )
             }
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -214,6 +234,21 @@ fun DatasetsScreen() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val metadata = ds.metadata
+                            val metadataSummary = listOfNotNull(
+                                metadata.samplingSite?.takeIf { it.isNotBlank() },
+                                metadata.sampleCode?.takeIf { it.isNotBlank() }
+                                    ?.let { "样品 $it" },
+                                metadata.sampledAt?.takeIf { it.isNotBlank() }
+                            ).joinToString(" · ")
+                            if (metadataSummary.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    metadataSummary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }
@@ -226,9 +261,22 @@ fun DatasetsScreen() {
             onDismissRequest = { showAddDialog = false },
             title = { Text("新建数据集") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     OutlinedTextField(value = newName, onValueChange = { newName = it }, label = { Text("名称") })
                     OutlinedTextField(value = newDesc, onValueChange = { newDesc = it }, label = { Text("描述") })
+                    OutlinedTextField(value = samplingSite, onValueChange = { samplingSite = it }, label = { Text("采样地点") })
+                    OutlinedTextField(value = sampleCode, onValueChange = { sampleCode = it }, label = { Text("样品编号") })
+                    OutlinedTextField(value = sampledAt, onValueChange = { sampledAt = it }, label = { Text("采样时间") })
+                    OutlinedTextField(value = latitude, onValueChange = { latitude = it }, label = { Text("纬度") })
+                    OutlinedTextField(value = longitude, onValueChange = { longitude = it }, label = { Text("经度") })
+                    OutlinedTextField(value = waterDepth, onValueChange = { waterDepth = it }, label = { Text("水深（米）") })
+                    OutlinedTextField(value = waterTemperature, onValueChange = { waterTemperature = it }, label = { Text("水温（℃）") })
+                    OutlinedTextField(value = ph, onValueChange = { ph = it }, label = { Text("pH") })
+                    OutlinedTextField(value = salinity, onValueChange = { salinity = it }, label = { Text("盐度（PSU）") })
                 }
             },
             confirmButton = {
@@ -239,15 +287,134 @@ fun DatasetsScreen() {
                             snackbarHostState.showSnackbar("请输入数据集名称")
                             return@launch
                         }
-                        LocalAppStore.addDataset(context, name, newDesc.trim())
+                        LocalAppStore.addDataset(
+                            context = context,
+                            name = name,
+                            description = newDesc.trim(),
+                            metadata = SampleMetadata(
+                                samplingSite = samplingSite.trim().takeIf { it.isNotBlank() },
+                                latitude = latitude.toDoubleOrNull(),
+                                longitude = longitude.toDoubleOrNull(),
+                                sampledAt = sampledAt.trim().takeIf { it.isNotBlank() },
+                                waterDepthMeters = waterDepth.toDoubleOrNull(),
+                                waterTemperatureCelsius = waterTemperature.toDoubleOrNull(),
+                                ph = ph.toDoubleOrNull(),
+                                salinityPsu = salinity.toDoubleOrNull(),
+                                sampleCode = sampleCode.trim().takeIf { it.isNotBlank() }
+                            )
+                        )
                         showAddDialog = false
                         newName = ""
                         newDesc = ""
+                        samplingSite = ""
+                        sampleCode = ""
+                        sampledAt = ""
+                        latitude = ""
+                        longitude = ""
+                        waterDepth = ""
+                        waterTemperature = ""
+                        ph = ""
+                        salinity = ""
                     }
                 }) { Text("创建") }
             },
             dismissButton = {
                 TextButton(onClick = { showAddDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    val preview = importPreview
+    val previewUri = importUri
+    if (showImportPreview && preview != null && previewUri != null) {
+        val hasConflict = datasets.any { it.name == preview.datasetName }
+        AlertDialog(
+            onDismissRequest = {
+                showImportPreview = false
+                importPreview = null
+                importUri = null
+            },
+            title = { Text("导入前预览") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("数据集：${preview.datasetName}")
+                    Text("图片：${preview.imageCount} 张")
+                    Text("解压后大小：${formatByteSize(preview.totalBytes)}")
+                    preview.description?.takeIf { it.isNotBlank() }?.let { Text("说明：$it") }
+                    if (hasConflict) {
+                        Divider()
+                        Text("发现同名数据集，请选择处理方式。")
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = importConflictStrategy == DatasetTransferService.ImportConflictStrategy.RENAME,
+                                onClick = {
+                                    importConflictStrategy = DatasetTransferService.ImportConflictStrategy.RENAME
+                                }
+                            )
+                            Text("重命名后导入")
+                        }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = importConflictStrategy == DatasetTransferService.ImportConflictStrategy.CANCEL,
+                                onClick = {
+                                    importConflictStrategy = DatasetTransferService.ImportConflictStrategy.CANCEL
+                                }
+                            )
+                            Text("取消导入")
+                        }
+                    }
+                    Text("导入失败的单个文件会列在结果提示中；导入中断会自动回滚已写入的图片。", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !importing,
+                    onClick = {
+                        showImportPreview = false
+                        scope.launch {
+                            importing = true
+                            importProgress = DatasetTransferService.TransferProgress(0, preview.imageCount, "准备中")
+                            val result = DatasetTransferService.importDatasetFromUri(
+                                context = context,
+                                uri = previewUri,
+                                settings = state.settings,
+                                speciesList = state.species,
+                                nameResolver = { resolveDatasetName(it) },
+                                existingDatasetNames = datasets.map { it.name }.toSet(),
+                                conflictStrategy = importConflictStrategy,
+                                onProgress = { importProgress = it }
+                            )
+                            importing = false
+                            importProgress = null
+                            importPreview = null
+                            importUri = null
+                            if (result.error != null) {
+                                snackbarHostState.showSnackbar(result.error)
+                                return@launch
+                            }
+                            val dataset = result.dataset ?: return@launch
+                            LocalAppStore.update(context) {
+                                it.copy(
+                                    datasets = it.datasets + dataset,
+                                    images = it.images + result.images
+                                )
+                            }
+                            LocalAppStore.recordUsage(context, UsageEvent.IMPORT)
+                            val failed = if (result.failedItems.isEmpty()) "" else "，失败 ${result.failedItems.size} 项"
+                            snackbarHostState.showSnackbar("已导入 ${dataset.name}，图片 ${result.importedCount} 张$failed")
+                        }
+                    }
+                ) { Text("开始导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showImportPreview = false
+                    importPreview = null
+                    importUri = null
+                }) { Text("取消") }
             }
         )
     }
@@ -262,11 +429,26 @@ fun DatasetsScreen() {
                 Button(onClick = {
                     scope.launch {
                         val imagesToDelete = state.images.filter { it.dataset_id == target.id }
-                        imagesToDelete.forEach { img ->
-                            StorageManager.deleteStoredUri(context, img.image_url)
+                        LocalAppStore.update(context) { currentState ->
+                            currentState.copy(
+                                datasets = currentState.datasets.filterNot { it.id == target.id },
+                                images = currentState.images.filterNot { it.dataset_id == target.id }
+                            )
                         }
-                        LocalAppStore.deleteDataset(context, target.id)
                         deleteTarget = null
+                        val result = snackbarHostState.showSnackbar("已删除 ${target.name}", "撤销")
+                        if (result == SnackbarResult.ActionPerformed) {
+                            LocalAppStore.update(context) { currentState ->
+                                currentState.copy(
+                                    datasets = currentState.datasets + target,
+                                    images = currentState.images + imagesToDelete
+                                )
+                            }
+                        } else {
+                            imagesToDelete.forEach { image ->
+                                StorageManager.deleteStoredUri(context, image.image_url)
+                            }
+                        }
                     }
                 }) { Text("删除") }
             },
@@ -275,4 +457,10 @@ fun DatasetsScreen() {
             }
         )
     }
+}
+
+private fun formatByteSize(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    if (bytes < 1024 * 1024) return "${bytes / 1024} KB"
+    return "${"%.1f".format(java.util.Locale.US, bytes / 1024f / 1024f)} MB"
 }

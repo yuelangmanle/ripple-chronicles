@@ -12,22 +12,18 @@ import {
   Download, 
   Trash2,
   CheckCircle2,
+  Star,
 } from 'lucide-react';
+import type { PlanktonImageRecord } from '@/lib/domain';
 
 import UploadModal from '@/components/UploadModal';
 import { exportToWord } from '@/lib/export';
 import SpeciesAutocomplete from '@/components/SpeciesAutocomplete';
 
-interface PlanktonImage {
-  id: string;
-  image_url: string;
-  custom_name: string;
-  created_at: string;
-  dataset_id: string;
-  species_id: string;
+interface PlanktonImage extends PlanktonImageRecord {
   species?: {
-    name_cn: string;
-    name_latin: string;
+    name_cn: string | null;
+    name_latin: string | null;
   };
 }
 
@@ -38,6 +34,8 @@ const Gallery: React.FC = () => {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
 
   useEffect(() => {
     fetchImages();
@@ -78,6 +76,20 @@ const Gallery: React.FC = () => {
     );
   };
 
+  const toggleFavorite = async (image: PlanktonImage) => {
+    const { error } = await supabase
+      .from('plankton_images')
+      .update({ is_favorite: !image.is_favorite })
+      .eq('id', image.id);
+    if (error) {
+      console.error('Failed to update favorite:', error);
+      return;
+    }
+    setImages(previous => previous.map(item =>
+      item.id === image.id ? { ...item, is_favorite: !item.is_favorite } : item
+    ));
+  };
+
   const handleExport = async () => {
     const selected = images.filter(img => selectedImages.includes(img.id));
     if (selected.length === 0) return;
@@ -89,6 +101,11 @@ const Gallery: React.FC = () => {
 
     await exportToWord(exportData);
   };
+
+  const visibleImages = images.filter(image => {
+    const text = `${image.custom_name || ''} ${image.species?.name_cn || ''} ${image.species?.name_latin || ''}`;
+    return (!favoritesOnly || image.is_favorite) && text.toLowerCase().includes(query.trim().toLowerCase());
+  });
 
   return (
     <div className="space-y-6">
@@ -116,10 +133,16 @@ const Gallery: React.FC = () => {
             <input 
               type="text" 
               placeholder="搜索物种名称..." 
+              value={query}
+              onChange={event => setQuery(event.target.value)}
               className="pl-10 pr-4 py-2 bg-gray-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-[#12B7F5] w-64 transition-all"
             />
           </div>
-          <button className="p-2 text-gray-400 hover:text-[#12B7F5] hover:bg-blue-50 rounded-xl transition-all">
+          <button
+            onClick={() => setFavoritesOnly(value => !value)}
+            className={`p-2 rounded-xl transition-all ${favoritesOnly ? 'text-[#12B7F5] bg-blue-50' : 'text-gray-400 hover:text-[#12B7F5] hover:bg-blue-50'}`}
+            title="仅看收藏"
+          >
             <Filter size={20} />
           </button>
         </div>
@@ -177,7 +200,7 @@ const Gallery: React.FC = () => {
           ? "grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4" 
           : "space-y-2"
         }>
-          {images.map((img) => (
+          {visibleImages.map((img) => (
             <motion.div
               key={img.id}
               whileHover={{ y: -4 }}
@@ -196,6 +219,13 @@ const Gallery: React.FC = () => {
               
               {viewMode === 'grid' ? (
                 <>
+                  <button
+                    onClick={(event) => { event.stopPropagation(); toggleFavorite(img); }}
+                    className="absolute top-2 left-2 p-1.5 rounded-full bg-white/90 text-[#12B7F5] shadow-sm"
+                    title={img.is_favorite ? '取消收藏' : '收藏'}
+                  >
+                    <Star size={16} fill={img.is_favorite ? 'currentColor' : 'none'} />
+                  </button>
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity p-3 flex flex-col justify-end">
                     {editingId === img.id ? (
                       <div onClick={(e) => e.stopPropagation()}>
@@ -218,17 +248,18 @@ const Gallery: React.FC = () => {
                   )}
                 </>
               ) : (
-                <div className="flex-1 flex items-center justify-between">
-                  <div>
-                    <p className="font-bold text-gray-800">{img.species?.name_cn || img.custom_name}</p>
-                    <p className="text-xs italic text-gray-500">{img.species?.name_latin}</p>
+                  <div className="flex-1 flex items-center justify-between">
+                    <div>
+                      <p className="font-bold text-gray-800">{img.species?.name_cn || img.custom_name}</p>
+                      <p className="text-xs italic text-gray-500">{img.species?.name_latin}</p>
+                      <p className="text-xs text-gray-400">{reviewStatusLabel(img.review_status)}{img.identification_confidence !== null ? ` · ${img.identification_confidence}%` : ''}</p>
                   </div>
                   <p className="text-xs text-gray-400">{new Date(img.created_at).toLocaleDateString()}</p>
                 </div>
               )}
             </motion.div>
           ))}
-          {images.length === 0 && (
+          {visibleImages.length === 0 && (
             <div className="col-span-full py-20 text-center bg-white rounded-3xl border-2 border-dashed border-gray-200">
               <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
                 <ImageIcon className="text-gray-300" size={32} />
@@ -247,5 +278,11 @@ const Gallery: React.FC = () => {
     </div>
   );
 };
+
+function reviewStatusLabel(status: PlanktonImage['review_status']) {
+  if (status === 'CONFIRMED') return '已确认';
+  if (status === 'REJECTED') return '已驳回';
+  return '待复核';
+}
 
 export default Gallery;

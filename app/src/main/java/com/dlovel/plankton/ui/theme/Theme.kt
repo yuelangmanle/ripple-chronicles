@@ -1,9 +1,13 @@
 
 package com.dlovel.plankton.ui.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
 private val BluePrimary = Color(0xFF12B7F5)
@@ -28,10 +32,39 @@ private val LightColorScheme = lightColorScheme(
     outline = Color(0xFFD4E4F7)
 )
 
+private val DarkColorScheme = darkColorScheme(
+    primary = Color(0xFF62D4FF),
+    onPrimary = Color(0xFF003548),
+    primaryContainer = Color(0xFF07516B),
+    onPrimaryContainer = Color(0xFFB9EBFF),
+    secondary = Color(0xFF8ED7F5),
+    onSecondary = Color(0xFF003545),
+    background = Color(0xFF101417),
+    onBackground = Color(0xFFE5F1F5),
+    surface = Color(0xFF171D20),
+    onSurface = Color(0xFFE5F1F5),
+    surfaceVariant = Color(0xFF25343A),
+    onSurfaceVariant = Color(0xFFB7C9CE),
+    outline = Color(0xFF4C626A)
+)
+
+val LocalMotionScale = staticCompositionLocalOf { 1f }
+
 @Composable
-fun PlanktonManagerTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = LightColorScheme,
-        content = content
-    )
+fun PlanktonManagerTheme(
+    themeMode: String = "SYSTEM",
+    animationScale: Float = 1f,
+    content: @Composable () -> Unit
+) {
+    val dark = when (themeMode) {
+        "DARK" -> true
+        "LIGHT" -> false
+        else -> isSystemInDarkTheme()
+    }
+    CompositionLocalProvider(LocalMotionScale provides animationScale.coerceIn(0f, 1.5f)) {
+        MaterialTheme(
+            colorScheme = if (dark) DarkColorScheme else LightColorScheme,
+            content = content
+        )
+    }
 }

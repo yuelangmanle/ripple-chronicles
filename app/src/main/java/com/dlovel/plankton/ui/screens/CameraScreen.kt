@@ -13,6 +13,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
@@ -66,6 +67,7 @@ import coil.compose.AsyncImage
 import com.dlovel.plankton.data.LocalAppStore
 import com.dlovel.plankton.data.PlanktonImage
 import com.dlovel.plankton.data.StorageMode
+import com.dlovel.plankton.data.UsageEvent
 import com.dlovel.plankton.service.StorageManager
 import com.dlovel.plankton.ui.components.GradientHeaderCard
 import com.dlovel.plankton.ui.components.SectionHeader
@@ -84,6 +86,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
+@ExperimentalCamera2Interop
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraScreen(navController: NavController) {
@@ -109,6 +112,7 @@ fun CameraScreen(navController: NavController) {
 
     var selectedDatasetId by remember { mutableStateOf("") }
     var datasetMenuExpanded by remember { mutableStateOf(false) }
+    var sampleCodeInput by remember { mutableStateOf("") }
     var hasPermission by remember { mutableStateOf(false) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var lensFacing by remember { mutableStateOf(CameraSelector.LENS_FACING_BACK) }
@@ -125,6 +129,7 @@ fun CameraScreen(navController: NavController) {
     var focusVisible by remember { mutableStateOf(false) }
     var focusLockEnabled by remember { mutableStateOf(false) }
     var showGrid by remember { mutableStateOf(false) }
+    var showScaleGuide by remember { mutableStateOf(false) }
     var selectedImageId by remember { mutableStateOf<String?>(null) }
     var customName by remember { mutableStateOf("") }
     var selectedSpeciesId by remember { mutableStateOf<String?>(null) }
@@ -149,6 +154,13 @@ fun CameraScreen(navController: NavController) {
 
     LaunchedEffect(settings.saveToAlbum) {
         savingToAlbum = settings.saveToAlbum
+    }
+
+    LaunchedEffect(selectedDatasetId, datasets) {
+        sampleCodeInput = datasets.firstOrNull { it.id == selectedDatasetId }
+            ?.metadata
+            ?.sampleCode
+            .orEmpty()
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -182,7 +194,7 @@ fun CameraScreen(navController: NavController) {
                     }
                 }
             try {
-                val baseName = file.nameWithoutExtension
+                val baseName = captureDisplayName(sampleCodeInput, file.nameWithoutExtension)
                 val autoSpeciesId = matchSpeciesIdByName(baseName, state.species)
                 if (savingToAlbum) {
                     saveToAlbum(context, file, baseName)
@@ -200,6 +212,7 @@ fun CameraScreen(navController: NavController) {
                     species_id = autoSpeciesId
                 )
                 LocalAppStore.addImages(context, listOf(newImage))
+                LocalAppStore.recordUsage(context, UsageEvent.CAPTURE)
                 selectedImageId = newImage.id
                 if (storedUri != Uri.fromFile(file).toString()) {
                     file.delete()
@@ -421,6 +434,15 @@ fun CameraScreen(navController: NavController) {
                         )
                     }
                 }
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = sampleCodeInput,
+                    onValueChange = { sampleCodeInput = it },
+                    label = { Text("本次样品编号") },
+                    supportingText = { Text("将写入照片名称，便于后续追溯") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -576,6 +598,17 @@ fun CameraScreen(navController: NavController) {
                             )
                         }
                     }
+                    if (showScaleGuide) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val y = size.height - 42.dp.toPx()
+                            val start = 28.dp.toPx()
+                            val end = start + size.width.coerceAtMost(180.dp.toPx()) / 3f
+                            val stroke = 3.dp.toPx()
+                            drawLine(Color.White, Offset(start, y), Offset(end, y), strokeWidth = stroke)
+                            drawLine(Color.White, Offset(start, y - 7.dp.toPx()), Offset(start, y + 7.dp.toPx()), strokeWidth = stroke)
+                            drawLine(Color.White, Offset(end, y - 7.dp.toPx()), Offset(end, y + 7.dp.toPx()), strokeWidth = stroke)
+                        }
+                    }
                     val point = focusPoint
                     if (point != null) {
                         Box(
@@ -668,7 +701,7 @@ fun CameraScreen(navController: NavController) {
                                         override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                                             scope.launch {
                                                 try {
-                                                    val baseName = file.nameWithoutExtension
+                                                    val baseName = captureDisplayName(sampleCodeInput, file.nameWithoutExtension)
                                                     val autoSpeciesId = matchSpeciesIdByName(baseName, state.species)
                                                     if (savingToAlbum) {
                                                         saveToAlbum(context, file, baseName)
@@ -696,6 +729,7 @@ fun CameraScreen(navController: NavController) {
                                                         species_id = autoSpeciesId
                                                     )
                                                     LocalAppStore.addImages(context, listOf(newImage))
+                                                    LocalAppStore.recordUsage(context, UsageEvent.CAPTURE)
                                                     selectedImageId = newImage.id
                                                 } catch (e: Exception) {
                                                     snackbarHostState.showSnackbar("保存失败: ${e.message ?: "未知错误"}")
@@ -795,6 +829,11 @@ fun CameraScreen(navController: NavController) {
                             selected = showGrid,
                             onClick = { showGrid = !showGrid },
                             label = { Text("网格线") }
+                        )
+                        FilterChip(
+                            selected = showScaleGuide,
+                            onClick = { showScaleGuide = !showScaleGuide },
+                            label = { Text("比例尺辅助") }
                         )
                         FilterChip(
                             selected = focusLockEnabled,
@@ -898,6 +937,11 @@ private fun createCaptureFile(context: Context): File {
     return File(dir, "IMG_$stamp.jpg")
 }
 
+private fun captureDisplayName(sampleCode: String, baseName: String): String {
+    val prefix = sampleCode.trim().replace(Regex("[^A-Za-z0-9_-]"), "_")
+    return if (prefix.isBlank()) baseName else "${prefix}_$baseName"
+}
+
 private fun createSystemCaptureFile(context: Context): File {
     val dir = File(context.cacheDir, "camera_temp")
     if (!dir.exists()) {
@@ -938,6 +982,7 @@ private data class CameraOption(
     val focalLength: Float
 )
 
+@ExperimentalCamera2Interop
 private fun buildCameraOptions(
     cameraProvider: ProcessCameraProvider,
     lensFacing: Int

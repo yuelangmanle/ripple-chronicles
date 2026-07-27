@@ -33,6 +33,23 @@ fun HomeScreen(navController: NavController) {
     val datasets = remember(state.datasets) {
         state.datasets.sortedByDescending { it.created_at }.take(2)
     }
+    val recentSpecies = remember(state.images, state.species) {
+        val speciesById = state.species.associateBy { it.id }
+        state.images.sortedByDescending { it.created_at }
+            .mapNotNull { image -> image.species_id?.let(speciesById::get) }
+            .distinctBy { it.id }
+            .take(5)
+    }
+    val commonSpecies = remember(state.images, state.species) {
+        val speciesById = state.species.associateBy { it.id }
+        state.images.mapNotNull { it.species_id }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .mapNotNull { (id, count) -> speciesById[id]?.let { it to count } }
+            .take(5)
+    }
     val surname = sanitizeSurname(state.settings.homeUserName).ifBlank { "邓" }
     var greeting by remember { mutableStateOf(resolveGreeting()) }
 
@@ -98,6 +115,32 @@ fun HomeScreen(navController: NavController) {
                     }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        SectionHeader(title = "最近鉴定", actionLabel = "打开图库", onActionClick = { navController.navigate("gallery") })
+        Spacer(modifier = Modifier.height(12.dp))
+        SoftCard(modifier = Modifier.fillMaxWidth()) {
+            if (recentSpecies.isEmpty()) {
+                Text("完成物种关联后，最近鉴定会显示在这里。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                recentSpecies.forEach { species ->
+                    Text(species.name_cn ?: species.name_latin ?: "未命名物种")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        SectionHeader(title = "常用物种")
+        Spacer(modifier = Modifier.height(12.dp))
+        SoftCard(modifier = Modifier.fillMaxWidth()) {
+            if (commonSpecies.isEmpty()) {
+                Text("导入并关联图片后，会按使用次数列出常用物种。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                commonSpecies.forEach { (species, count) ->
+                    Text("${species.name_cn ?: species.name_latin ?: "未命名物种"} · $count 次")
+                }
             }
         }
     }

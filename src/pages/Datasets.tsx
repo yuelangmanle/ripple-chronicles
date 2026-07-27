@@ -3,12 +3,9 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { motion } from 'framer-motion';
 import { Plus, Database, Calendar, Image as ImageIcon, MoreVertical, Search } from 'lucide-react';
+import type { DatasetRecord } from '@/lib/domain';
 
-interface Dataset {
-  id: string;
-  name: string;
-  description: string;
-  created_at: string;
+interface Dataset extends DatasetRecord {
   image_count?: number;
 }
 
@@ -16,11 +13,33 @@ interface DatasetRow extends Dataset {
   plankton_images?: Array<{ count: number | null }>;
 }
 
+interface DatasetDraft {
+  name: string;
+  description: string;
+  sampling_site: string;
+  sample_code: string;
+  sampled_at: string;
+  latitude: string;
+  longitude: string;
+  water_depth_meters: string;
+  water_temperature_celsius: string;
+  ph: string;
+  salinity_psu: string;
+}
+
+const emptyDataset: DatasetDraft = {
+  name: '', description: '', sampling_site: '', sample_code: '', sampled_at: '',
+  latitude: '', longitude: '', water_depth_meters: '', water_temperature_celsius: '',
+  ph: '', salinity_psu: ''
+};
+
+const nullableNumber = (value: string) => value.trim() === '' ? null : Number(value);
+
 const Datasets: React.FC = () => {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [newDataset, setNewDataset] = useState({ name: '', description: '' });
+  const [newDataset, setNewDataset] = useState<DatasetDraft>(emptyDataset);
 
   useEffect(() => {
     fetchDatasets();
@@ -47,12 +66,25 @@ const Datasets: React.FC = () => {
 
   async function createDataset() {
     if (!newDataset.name) return;
-    const { error } = await supabase.from('datasets').insert([newDataset]);
+    const { error } = await supabase.from('datasets').insert([{
+      ...newDataset,
+      name: newDataset.name.trim(),
+      description: newDataset.description.trim() || null,
+      sampling_site: newDataset.sampling_site.trim() || null,
+      sample_code: newDataset.sample_code.trim() || null,
+      sampled_at: newDataset.sampled_at || null,
+      latitude: nullableNumber(newDataset.latitude),
+      longitude: nullableNumber(newDataset.longitude),
+      water_depth_meters: nullableNumber(newDataset.water_depth_meters),
+      water_temperature_celsius: nullableNumber(newDataset.water_temperature_celsius),
+      ph: nullableNumber(newDataset.ph),
+      salinity_psu: nullableNumber(newDataset.salinity_psu),
+    }]);
     if (error) {
       console.error('Error creating dataset:', error);
     } else {
       setShowModal(false);
-      setNewDataset({ name: '', description: '' });
+      setNewDataset(emptyDataset);
       fetchDatasets();
     }
   }
@@ -117,6 +149,11 @@ const Datasets: React.FC = () => {
               </div>
               <h3 className="text-lg font-bold text-gray-800 mb-1 group-hover:text-[#12B7F5] transition-colors">{ds.name}</h3>
               <p className="text-sm text-gray-500 line-clamp-2 mb-4 h-10">{ds.description || '暂无描述'}</p>
+              {(ds.sampling_site || ds.sample_code) && (
+                <p className="text-xs text-[#0EA1D9] mb-3 truncate">
+                  {[ds.sample_code && `样品 ${ds.sample_code}`, ds.sampling_site].filter(Boolean).join(' · ')}
+                </p>
+              )}
               
               <div className="flex items-center justify-between pt-4 border-t border-gray-50">
                 <div className="flex items-center space-x-2 text-xs text-gray-400">
@@ -147,7 +184,7 @@ const Datasets: React.FC = () => {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl"
+            className="bg-white w-full max-w-md max-h-[90vh] overflow-y-auto rounded-3xl p-8 shadow-2xl"
           >
             <h3 className="text-xl font-bold text-gray-800 mb-6">新建数据集</h3>
             <div className="space-y-4">
@@ -160,6 +197,30 @@ const Datasets: React.FC = () => {
                   placeholder="例如：赣江北支采样-202401"
                   className="w-full px-4 py-3 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-[#12B7F5] transition-all"
                 />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {[
+                  ['sampling_site', '采样地点', '例如：赣江北支'],
+                  ['sample_code', '样品编号', '例如：GJ-20260728-01'],
+                  ['sampled_at', '采样时间', '2026-07-28T09:30'],
+                  ['latitude', '纬度', '例如：28.682'],
+                  ['longitude', '经度', '例如：115.883'],
+                  ['water_depth_meters', '水深（m）', '例如：2.5'],
+                  ['water_temperature_celsius', '水温（℃）', '例如：24.6'],
+                  ['ph', 'pH', '例如：7.2'],
+                  ['salinity_psu', '盐度（PSU）', '例如：0.3'],
+                ].map(([key, label, placeholder]) => (
+                  <div key={key}>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+                    <input
+                      type={key === 'sampled_at' ? 'datetime-local' : 'text'}
+                      value={newDataset[key as keyof DatasetDraft]}
+                      onChange={e => setNewDataset({ ...newDataset, [key]: e.target.value })}
+                      placeholder={placeholder}
+                      className="w-full px-4 py-3 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-[#12B7F5] transition-all"
+                    />
+                  </div>
+                ))}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">项目描述</label>

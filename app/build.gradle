@@ -32,8 +32,8 @@ android {
         applicationId "com.dlovel"
         minSdk 26
         targetSdk 34
-        versionCode 20
-        versionName "1.7.3"
+        versionCode 21
+        versionName "1.7.4"
 
         buildConfigField "String", "SUPABASE_URL", quoteBuildConfig(supabaseUrl)
         buildConfigField "String", "SUPABASE_ANON_KEY", quoteBuildConfig(supabaseAnonKey)
@@ -92,6 +92,7 @@ android {
 
 def archiveDir = rootProject.file("archives/apk")
 def apkPath = "$buildDir/outputs/apk/debug/app-debug.apk"
+def releaseApkPath = "$buildDir/outputs/apk/release/app-release.apk"
 tasks.register("archiveDebugApk", Copy) {
     onlyIf { file(apkPath).exists() }
     from(apkPath)
@@ -112,9 +113,29 @@ afterEvaluate {
     }
 }
 
+tasks.register("archiveReleaseApk", Copy) {
+    onlyIf { file(releaseApkPath).exists() }
+    from(releaseApkPath)
+    into(archiveDir)
+    doFirst {
+        archiveDir.mkdirs()
+    }
+    rename { fileName ->
+        def vName = android.defaultConfig.versionName
+        def vCode = android.defaultConfig.versionCode
+        "ripple-chronicles-release-v${vName}-${vCode}.apk"
+    }
+}
+afterEvaluate {
+    tasks.matching { it.name == "assembleRelease" }.configureEach {
+        finalizedBy("archiveReleaseApk")
+    }
+}
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.6.2'
     implementation 'androidx.activity:activity-compose:1.8.1'
     implementation platform('androidx.compose:compose-bom:2023.08.00')
     implementation 'androidx.compose.ui:ui'

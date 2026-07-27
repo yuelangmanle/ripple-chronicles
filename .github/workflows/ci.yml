@@ -17,12 +17,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK
         run: sdkmanager "platforms;android-34" "build-tools;35.0.0"
       - uses: gradle/actions/setup-gradle@v4
       - name: Run Android checks
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - name: Verify release metadata contract
+        run: node scripts/check_release_consistency.cjs
 
   web:
     runs-on: ubuntu-latest
@@ -35,3 +40,4 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run lint
+      - run: npm run release:check

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.*
@@ -50,8 +51,10 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.size.Size
 import com.dlovel.plankton.data.LocalAppStore
+import com.dlovel.plankton.data.Dataset
 import com.dlovel.plankton.data.PlanktonImage
 import com.dlovel.plankton.data.StorageMode
+import com.dlovel.plankton.data.UsageEvent
 import com.dlovel.plankton.service.ExportService
 import com.dlovel.plankton.service.StorageManager
 import com.dlovel.plankton.ui.components.EmptyStateCard
@@ -101,11 +104,20 @@ fun GalleryScreen(navController: NavController) {
     var categoryFilterDialog by remember { mutableStateOf(false) }
     var selectedDatasetIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedCategories by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var favoritesOnly by remember { mutableStateOf(false) }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedImageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var renameTarget by remember { mutableStateOf<PlanktonImage?>(null) }
     var renameName by remember { mutableStateOf("") }
     var renameSpeciesId by remember { mutableStateOf<String?>(null) }
+    var showBatchLinkDialog by remember { mutableStateOf(false) }
+    var batchSpeciesId by remember { mutableStateOf<String?>(null) }
+    var batchSpeciesName by remember { mutableStateOf("") }
+    var showBatchRenameDialog by remember { mutableStateOf(false) }
+    var batchRenamePrefix by remember { mutableStateOf("") }
+    var confidenceText by remember { mutableStateOf("") }
+    var reviewStatus by remember { mutableStateOf("UNREVIEWED") }
+    var reviewNote by remember { mutableStateOf("") }
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
     var pendingExportItems by remember { mutableStateOf<List<ExportService.ExportItem>>(emptyList()) }
     var deleteImageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -113,6 +125,11 @@ fun GalleryScreen(navController: NavController) {
     var contentVisible by remember { mutableStateOf(false) }
     var autoLinking by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val reportMetadataSummary = remember(selectedDatasetIds, selectedDatasetId, datasetMap) {
+        val dataset = selectedDatasetIds.singleOrNull()?.let { datasetMap[it] }
+            ?: datasetMap[selectedDatasetId]
+        dataset?.let(::formatReportMetadata)
+    }
     val showScrollTop by remember {
         derivedStateOf { listState.firstVisibleItemIndex > 0 }
     }
@@ -129,6 +146,13 @@ fun GalleryScreen(navController: NavController) {
         contentVisible = true
     }
 
+    LaunchedEffect(renameTarget?.id) {
+        val target = renameTarget
+        confidenceText = target?.identificationConfidence?.toString().orEmpty()
+        reviewStatus = target?.reviewStatus ?: "UNREVIEWED"
+        reviewNote = target?.reviewNote.orEmpty()
+    }
+
     val enterUp = remember {
         fadeIn(tween(260)) + slideInVertically(initialOffsetY = { it / 6 })
     }
@@ -139,6 +163,8 @@ fun GalleryScreen(navController: NavController) {
             datasetFilterDialog ||
             categoryFilterDialog ||
             selectionMode ||
+            showBatchLinkDialog ||
+            showBatchRenameDialog ||
             deleteImageIds.isNotEmpty()
     ) {
         when {
@@ -146,6 +172,8 @@ fun GalleryScreen(navController: NavController) {
             renameTarget != null -> renameTarget = null
             datasetFilterDialog -> datasetFilterDialog = false
             categoryFilterDialog -> categoryFilterDialog = false
+            showBatchLinkDialog -> showBatchLinkDialog = false
+            showBatchRenameDialog -> showBatchRenameDialog = false
             deleteImageIds.isNotEmpty() -> deleteImageIds = emptySet()
             selectionMode -> {
                 selectionMode = false
@@ -215,6 +243,7 @@ fun GalleryScreen(navController: NavController) {
             )
             exporting = false
             if (result.uri != null) {
+                LocalAppStore.recordUsage(context, UsageEvent.EXPORT)
                 val snack = snackbarHostState.showSnackbar("已导出 ${result.displayName}", "分享")
                 if (snack == SnackbarResult.ActionPerformed) {
                     ShareUtils.shareUri(context, result.uri, result.mimeType, "分享导出图片")
@@ -240,10 +269,12 @@ fun GalleryScreen(navController: NavController) {
                 context,
                 pendingExportItems,
                 uri,
-                quality = settings.exportQuality
+                quality = settings.exportQuality,
+                metadataSummary = reportMetadataSummary
             )
             exporting = false
             if (result.uri != null) {
+                LocalAppStore.recordUsage(context, UsageEvent.EXPORT)
                 val snack = snackbarHostState.showSnackbar("已导出 ${result.displayName}", "分享")
                 if (snack == SnackbarResult.ActionPerformed) {
                     ShareUtils.shareUri(context, result.uri, result.mimeType, "分享鉴定报告")
@@ -278,6 +309,7 @@ fun GalleryScreen(navController: NavController) {
             if (result.error != null) {
                 snackbarHostState.showSnackbar(result.error)
             } else {
+                LocalAppStore.recordUsage(context, UsageEvent.EXPORT)
                 snackbarHostState.showSnackbar("已导出 ${result.successCount} 张")
             }
         }
@@ -287,6 +319,7 @@ fun GalleryScreen(navController: NavController) {
         val datasetMatch = selectedDatasetIds.isEmpty() || selectedDatasetIds.contains(img.dataset_id)
         val category = speciesMap[img.species_id]?.category ?: "未分类"
         val categoryMatch = selectedCategories.isEmpty() || selectedCategories.contains(category)
+        val favoritesMatch = !favoritesOnly || img.isFavorite
         val query = searchQuery.trim()
         val searchMatch = if (query.isBlank()) {
             true
@@ -296,7 +329,7 @@ fun GalleryScreen(navController: NavController) {
             val datasetName = datasetMap[img.dataset_id]?.name ?: ""
             name.contains(query) || speciesName.contains(query) || datasetName.contains(query)
         }
-        datasetMatch && categoryMatch && searchMatch
+        datasetMatch && categoryMatch && favoritesMatch && searchMatch
     }
     var page by remember { mutableStateOf(1) }
     val pageSize = 40
@@ -506,6 +539,7 @@ fun GalleryScreen(navController: NavController) {
                 TextButton(onClick = {
                     selectedDatasetIds = emptySet()
                     selectedCategories = emptySet()
+                    favoritesOnly = false
                     searchQuery = ""
                 }) {
                     Text("查看全部")
@@ -519,6 +553,16 @@ fun GalleryScreen(navController: NavController) {
                         Text("仅看 $name")
                     }
                 }
+                FilterChip(
+                    selected = favoritesOnly,
+                    onClick = { favoritesOnly = !favoritesOnly },
+                    label = { Text("收藏") },
+                    leadingIcon = if (favoritesOnly) {
+                        { Icon(Icons.Default.Star, contentDescription = null) }
+                    } else {
+                        null
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -653,7 +697,7 @@ fun GalleryScreen(navController: NavController) {
                 IconButton(onClick = { viewMode = if (viewMode == "grid") "list" else "grid" }) {
                     Icon(
                         imageVector = if (viewMode == "grid") Icons.Default.ViewList else Icons.Default.ViewModule,
-                        contentDescription = null
+                        contentDescription = if (viewMode == "grid") "切换为列表" else "切换为网格"
                     )
                 }
             }
@@ -661,31 +705,63 @@ fun GalleryScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
 
             if (selectionMode) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("已选 ${selectedImageIds.size} 张", style = MaterialTheme.typography.labelMedium)
-                    TextButton(onClick = {
-                        selectedImageIds = filteredImages.map { it.id }.toSet()
-                    }) {
-                        Text("全选")
-                    }
-                    TextButton(onClick = { selectedImageIds = emptySet() }) {
-                        Text("清空")
-                    }
-                    TextButton(onClick = {
-                        selectionMode = false
-                        selectedImageIds = emptySet()
-                    }) {
-                        Text("退出选择")
-                    }
-                    TextButton(
-                        enabled = selectedImageIds.isNotEmpty(),
-                        onClick = { deleteImageIds = selectedImageIds }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("删除")
+                        Text("已选 ${selectedImageIds.size} 张", style = MaterialTheme.typography.labelMedium)
+                        TextButton(onClick = { selectedImageIds = filteredImages.map { it.id }.toSet() }) { Text("全选") }
+                        TextButton(onClick = { selectedImageIds = emptySet() }) { Text("清空") }
+                        TextButton(onClick = {
+                            selectionMode = false
+                            selectedImageIds = emptySet()
+                        }) { Text("退出选择") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            enabled = selectedImageIds.isNotEmpty(),
+                            onClick = { deleteImageIds = selectedImageIds }
+                        ) { Text("删除") }
+                        TextButton(
+                            enabled = selectedImageIds.isNotEmpty(),
+                            onClick = {
+                                val ids = selectedImageIds
+                                scope.launch {
+                                    LocalAppStore.update(context) { currentState ->
+                                        currentState.copy(
+                                            images = currentState.images.map { image ->
+                                                if (image.id in ids) {
+                                                    image.copy(
+                                                        reviewStatus = "CONFIRMED",
+                                                        reviewedAt = System.currentTimeMillis()
+                                                    )
+                                                } else image
+                                            }
+                                        )
+                                    }
+                                    snackbarHostState.showSnackbar("已批量标记 ${ids.size} 张图片为已确认")
+                                }
+                            }
+                        ) { Text("批量确认") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            enabled = selectedImageIds.isNotEmpty(),
+                            onClick = {
+                                batchSpeciesId = null
+                                batchSpeciesName = ""
+                                showBatchLinkDialog = true
+                            }
+                        ) { Text("批量关联") }
+                        TextButton(
+                            enabled = selectedImageIds.isNotEmpty(),
+                            onClick = {
+                                batchRenamePrefix = ""
+                                showBatchRenameDialog = true
+                            }
+                        ) { Text("批量重命名") }
                     }
                 }
             } else {
@@ -982,7 +1058,13 @@ fun GalleryScreen(navController: NavController) {
                             pendingExportItems = exportImages.mapIndexed { index, img ->
                                 ExportService.ExportItem(
                                     source = img.image_url,
-                                    name = img.custom_name ?: "图片${index + 1}"
+                                    name = img.custom_name ?: "图片${index + 1}",
+                                    speciesName = speciesMap[img.species_id]?.name_cn,
+                                    speciesLatin = speciesMap[img.species_id]?.name_latin,
+                                    confidence = img.identificationConfidence,
+                                    reviewStatus = img.reviewStatus,
+                                    reviewNote = img.reviewNote,
+                                    createdAt = img.created_at
                                 )
                             }
                             exportPreviewMode = null
@@ -1005,7 +1087,11 @@ fun GalleryScreen(navController: NavController) {
             onDismissRequest = { datasetFilterDialog = false },
             title = { Text("筛选数据集") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     datasets.forEach { dataset ->
                         val checked = selectedDatasetIds.contains(dataset.id)
                         Row(
@@ -1097,6 +1183,38 @@ fun GalleryScreen(navController: NavController) {
                             renameSpeciesId = species.id
                         }
                     )
+                    OutlinedTextField(
+                        value = confidenceText,
+                        onValueChange = { value ->
+                            confidenceText = value.filter(Char::isDigit).take(3)
+                        },
+                        label = { Text("鉴定置信度（0-100）") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("复核状态", style = MaterialTheme.typography.labelMedium)
+                    listOf(
+                        "UNREVIEWED" to "待复核",
+                        "CONFIRMED" to "已确认",
+                        "REJECTED" to "已驳回"
+                    ).forEach { (value, label) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = reviewStatus == value,
+                                onClick = { reviewStatus = value }
+                            )
+                            Text(label)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = reviewNote,
+                        onValueChange = { reviewNote = it },
+                        label = { Text("复核备注") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
                 }
             },
             confirmButton = {
@@ -1107,7 +1225,16 @@ fun GalleryScreen(navController: NavController) {
                         LocalAppStore.updateImage(context, target.id) { img ->
                             img.copy(
                                 custom_name = renameName.trim().ifBlank { img.custom_name },
-                                species_id = renameSpeciesId
+                                species_id = renameSpeciesId,
+                                identificationConfidence = confidenceText.toIntOrNull()
+                                    ?.coerceIn(0, 100),
+                                reviewStatus = reviewStatus,
+                                reviewNote = reviewNote.trim().takeIf { it.isNotBlank() },
+                                reviewedAt = if (reviewStatus == "UNREVIEWED") {
+                                    null
+                                } else {
+                                    System.currentTimeMillis()
+                                }
                             )
                         }
                     }
@@ -1117,6 +1244,83 @@ fun GalleryScreen(navController: NavController) {
             dismissButton = {
                 TextButton(onClick = { renameTarget = null }) { Text("取消") }
             }
+        )
+    }
+
+    if (showBatchLinkDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchLinkDialog = false },
+            title = { Text("批量关联物种") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SpeciesAutocomplete(
+                        initialValue = batchSpeciesName,
+                        onSpeciesSelected = { species ->
+                            batchSpeciesId = species.id
+                            batchSpeciesName = species.name_cn.orEmpty()
+                        }
+                    )
+                    Text("将为 ${selectedImageIds.size} 张图片写入相同物种关联。", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = batchSpeciesId != null,
+                    onClick = {
+                        val ids = selectedImageIds
+                        val speciesId = batchSpeciesId ?: return@Button
+                        scope.launch {
+                            LocalAppStore.update(context) { currentState ->
+                                currentState.copy(images = currentState.images.map { image ->
+                                    if (image.id in ids) image.copy(species_id = speciesId) else image
+                                })
+                            }
+                            snackbarHostState.showSnackbar("已批量关联 ${ids.size} 张图片")
+                        }
+                        showBatchLinkDialog = false
+                    }
+                ) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { showBatchLinkDialog = false }) { Text("取消") } }
+        )
+    }
+
+    if (showBatchRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchRenameDialog = false },
+            title = { Text("批量重命名") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = batchRenamePrefix,
+                        onValueChange = { batchRenamePrefix = it },
+                        label = { Text("名称前缀") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("将按当前列表顺序命名为“前缀_001、前缀_002 ...”。", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = batchRenamePrefix.trim().isNotBlank(),
+                    onClick = {
+                        val ids = filteredImages.filter { it.id in selectedImageIds }.map { it.id }
+                        val names = ids.mapIndexed { index, id ->
+                            id to "${batchRenamePrefix.trim()}_${(index + 1).toString().padStart(3, '0')}"
+                        }.toMap()
+                        scope.launch {
+                            LocalAppStore.update(context) { currentState ->
+                                currentState.copy(images = currentState.images.map { image ->
+                                    names[image.id]?.let { image.copy(custom_name = it) } ?: image
+                                })
+                            }
+                            snackbarHostState.showSnackbar("已重命名 ${names.size} 张图片")
+                        }
+                        showBatchRenameDialog = false
+                    }
+                ) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { showBatchRenameDialog = false }) { Text("取消") } }
         )
     }
 
@@ -1132,10 +1336,19 @@ fun GalleryScreen(navController: NavController) {
                     selectionMode = false
                     selectedImageIds = emptySet()
                     scope.launch {
-                        ids.forEach { id ->
-                            val img = state.images.firstOrNull { it.id == id } ?: return@forEach
-                            StorageManager.deleteStoredUri(context, img.image_url)
-                            LocalAppStore.deleteImage(context, id)
+                        val removed = state.images.filter { it.id in ids }
+                        LocalAppStore.update(context) { currentState ->
+                            currentState.copy(images = currentState.images.filterNot { it.id in ids })
+                        }
+                        val result = snackbarHostState.showSnackbar("已删除 ${removed.size} 张图片", "撤销")
+                        if (result == SnackbarResult.ActionPerformed) {
+                            LocalAppStore.update(context) { currentState ->
+                                currentState.copy(images = currentState.images + removed)
+                            }
+                        } else {
+                            removed.forEach { image ->
+                                StorageManager.deleteStoredUri(context, image.image_url)
+                            }
                         }
                     }
                 }) { Text("删除") }
@@ -1231,6 +1444,12 @@ fun GalleryScreen(navController: NavController) {
                     Text(current.custom_name ?: "未命名", style = MaterialTheme.typography.titleSmall)
                     Text(speciesName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(datasetName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = "复核：" + reviewStatusLabel(current.reviewStatus) +
+                            " · 置信度：" + (current.identificationConfidence?.toString() ?: "未填写"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1260,6 +1479,25 @@ fun GalleryScreen(navController: NavController) {
                             Icon(Icons.Default.ChevronLeft, contentDescription = null)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        LocalAppStore.updateImage(context, current.id) {
+                                            it.copy(isFavorite = !it.isFavorite)
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = if (current.isFavorite) "取消收藏" else "收藏",
+                                    tint = if (current.isFavorite) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            }
                             OutlinedButton(onClick = {
                                 VibrationUtil.vibrate(context, 20)
                                 renameTarget = current
@@ -1310,6 +1548,31 @@ private fun safeBaseName(name: String?): String? {
 
 private fun exportTimestamp(): String {
     return SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())
+}
+
+private fun reviewStatusLabel(status: String): String {
+    return when (status) {
+        "CONFIRMED" -> "已确认"
+        "REJECTED" -> "已驳回"
+        else -> "待复核"
+    }
+}
+
+private fun formatReportMetadata(dataset: Dataset): String {
+    val metadata = dataset.metadata
+    val values = listOfNotNull(
+        "数据集：" + dataset.name,
+        metadata.sampleCode?.takeIf { it.isNotBlank() }?.let { "样品编号：" + it },
+        metadata.samplingSite?.takeIf { it.isNotBlank() }?.let { "采样地点：" + it },
+        metadata.sampledAt?.takeIf { it.isNotBlank() }?.let { "采样时间：" + it },
+        metadata.latitude?.let { "纬度：" + it },
+        metadata.longitude?.let { "经度：" + it },
+        metadata.waterDepthMeters?.let { "水深：" + it + " m" },
+        metadata.waterTemperatureCelsius?.let { "水温：" + it + " ℃" },
+        metadata.ph?.let { "pH：" + it },
+        metadata.salinityPsu?.let { "盐度：" + it + " PSU" }
+    )
+    return values.joinToString("  |  ")
 }
 
 private const val DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
