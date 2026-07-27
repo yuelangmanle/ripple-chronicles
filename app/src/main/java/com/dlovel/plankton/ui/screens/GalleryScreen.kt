@@ -1,0 +1,1321 @@
+package com.dlovel.plankton.ui.screens
+
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.filled.ViewModule
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.navigation.NavController
+import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.size.Size
+import com.dlovel.plankton.data.LocalAppStore
+import com.dlovel.plankton.data.PlanktonImage
+import com.dlovel.plankton.data.StorageMode
+import com.dlovel.plankton.service.ExportService
+import com.dlovel.plankton.service.StorageManager
+import com.dlovel.plankton.ui.components.EmptyStateCard
+import com.dlovel.plankton.ui.components.GradientHeaderCard
+import com.dlovel.plankton.ui.components.SectionHeader
+import com.dlovel.plankton.ui.components.SoftCard
+import com.dlovel.plankton.ui.components.SpeciesAutocomplete
+import com.dlovel.plankton.util.ShareUtils
+import com.dlovel.plankton.util.VibrationUtil
+import com.dlovel.plankton.util.matchSpeciesIdByName
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.collectLatest
+import me.saket.telephoto.zoomable.rememberZoomableImageState
+import me.saket.telephoto.zoomable.rememberZoomableState
+import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun GalleryScreen(navController: NavController) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val state by LocalAppStore.state.collectAsState()
+    val datasets = state.datasets.sortedByDescending { it.created_at }
+    val images = state.images.sortedByDescending { it.created_at }
+    val settings = state.settings
+
+    val speciesMap = remember(state.species) { state.species.associateBy { it.id } }
+    val datasetMap = remember(datasets) { datasets.associateBy { it.id } }
+    val categories = remember(state.species) {
+        (state.species.mapNotNull { it.category }.distinct() + "未分类").distinct()
+    }
+
+    var exportMenuExpanded by remember { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
+    var datasetMenuExpanded by remember { mutableStateOf(false) }
+    var selectedDatasetId by remember { mutableStateOf("") }
+    var viewMode by remember { mutableStateOf("grid") }
+    var searchQuery by remember { mutableStateOf("") }
+    var suggestionsExpanded by remember { mutableStateOf(false) }
+    var datasetFilterDialog by remember { mutableStateOf(false) }
+    var categoryFilterDialog by remember { mutableStateOf(false) }
+    var selectedDatasetIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedCategories by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedImageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var renameTarget by remember { mutableStateOf<PlanktonImage?>(null) }
+    var renameName by remember { mutableStateOf("") }
+    var renameSpeciesId by remember { mutableStateOf<String?>(null) }
+    var viewerIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingExportItems by remember { mutableStateOf<List<ExportService.ExportItem>>(emptyList()) }
+    var deleteImageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var exportPreviewMode by remember { mutableStateOf<ExportMode?>(null) }
+    var contentVisible by remember { mutableStateOf(false) }
+    var autoLinking by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val showScrollTop by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 }
+    }
+
+    LaunchedEffect(datasets) {
+        if (datasets.isEmpty()) {
+            selectedDatasetId = ""
+        } else if (selectedDatasetId.isBlank() || datasets.none { it.id == selectedDatasetId }) {
+            selectedDatasetId = datasets.first().id
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        contentVisible = true
+    }
+
+    val enterUp = remember {
+        fadeIn(tween(260)) + slideInVertically(initialOffsetY = { it / 6 })
+    }
+
+    BackHandler(
+        enabled = viewerIndex != null ||
+            renameTarget != null ||
+            datasetFilterDialog ||
+            categoryFilterDialog ||
+            selectionMode ||
+            deleteImageIds.isNotEmpty()
+    ) {
+        when {
+            viewerIndex != null -> viewerIndex = null
+            renameTarget != null -> renameTarget = null
+            datasetFilterDialog -> datasetFilterDialog = false
+            categoryFilterDialog -> categoryFilterDialog = false
+            deleteImageIds.isNotEmpty() -> deleteImageIds = emptySet()
+            selectionMode -> {
+                selectionMode = false
+                selectedImageIds = emptySet()
+            }
+        }
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            val targetDatasetId = if (selectedDatasetId.isNotBlank()) {
+                selectedDatasetId
+            } else {
+                LocalAppStore.addDataset(context, "默认数据集", "自动创建").id.also {
+                    selectedDatasetId = it
+                }
+            }
+
+            if (settings.storageMode == StorageMode.CUSTOM && settings.customRootUri.isNullOrBlank()) {
+                snackbarHostState.showSnackbar("请先在设置中选择自定义路径")
+                return@launch
+            }
+
+            val newImages = mutableListOf<PlanktonImage>()
+            uris.forEachIndexed { index, uri ->
+                val baseName = safeBaseName(queryDisplayName(context, uri))
+                    ?: "图片_${images.size + index + 1}"
+                val savedUri = StorageManager.copyToStorage(context, uri, settings, baseName)
+                if (savedUri != null) {
+                    newImages.add(
+                        PlanktonImage(
+                            dataset_id = targetDatasetId,
+                            image_url = savedUri,
+                            custom_name = baseName
+                        )
+                    )
+                }
+            }
+            if (newImages.isNotEmpty()) {
+                LocalAppStore.addImages(context, newImages)
+                snackbarHostState.showSnackbar("已保存到本地 ${newImages.size} 张")
+            } else {
+                snackbarHostState.showSnackbar("导入失败，请重试")
+            }
+        }
+    }
+
+    val zipExporter = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (pendingExportItems.isEmpty()) {
+            scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            exporting = true
+            VibrationUtil.vibrate(context, 20)
+            val result = ExportService.exportImagesZipToUri(
+                context,
+                pendingExportItems,
+                uri,
+                quality = settings.exportQuality
+            )
+            exporting = false
+            if (result.uri != null) {
+                val snack = snackbarHostState.showSnackbar("已导出 ${result.displayName}", "分享")
+                if (snack == SnackbarResult.ActionPerformed) {
+                    ShareUtils.shareUri(context, result.uri, result.mimeType, "分享导出图片")
+                }
+            } else {
+                snackbarHostState.showSnackbar(result.error ?: "导出失败")
+            }
+        }
+    }
+
+    val docExporter = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument(DOCX_MIME)
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (pendingExportItems.isEmpty()) {
+            scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            exporting = true
+            VibrationUtil.vibrate(context, 20)
+            val result = ExportService.exportReportToUri(
+                context,
+                pendingExportItems,
+                uri,
+                quality = settings.exportQuality
+            )
+            exporting = false
+            if (result.uri != null) {
+                val snack = snackbarHostState.showSnackbar("已导出 ${result.displayName}", "分享")
+                if (snack == SnackbarResult.ActionPerformed) {
+                    ShareUtils.shareUri(context, result.uri, result.mimeType, "分享鉴定报告")
+                }
+            } else {
+                snackbarHostState.showSnackbar(result.error ?: "导出失败")
+            }
+        }
+    }
+
+    val folderExporter = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (pendingExportItems.isEmpty()) {
+            scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+            return@rememberLauncherForActivityResult
+        }
+        val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        context.contentResolver.takePersistableUriPermission(uri, flags)
+        scope.launch {
+            exporting = true
+            VibrationUtil.vibrate(context, 20)
+            val result = ExportService.exportImagesToFolderUri(
+                context,
+                pendingExportItems,
+                uri,
+                quality = settings.exportQuality
+            )
+            exporting = false
+            if (result.error != null) {
+                snackbarHostState.showSnackbar(result.error)
+            } else {
+                snackbarHostState.showSnackbar("已导出 ${result.successCount} 张")
+            }
+        }
+    }
+
+    val filteredImages = images.filter { img ->
+        val datasetMatch = selectedDatasetIds.isEmpty() || selectedDatasetIds.contains(img.dataset_id)
+        val category = speciesMap[img.species_id]?.category ?: "未分类"
+        val categoryMatch = selectedCategories.isEmpty() || selectedCategories.contains(category)
+        val query = searchQuery.trim()
+        val searchMatch = if (query.isBlank()) {
+            true
+        } else {
+            val name = img.custom_name ?: ""
+            val speciesName = speciesMap[img.species_id]?.name_cn ?: ""
+            val datasetName = datasetMap[img.dataset_id]?.name ?: ""
+            name.contains(query) || speciesName.contains(query) || datasetName.contains(query)
+        }
+        datasetMatch && categoryMatch && searchMatch
+    }
+    var page by remember { mutableStateOf(1) }
+    val pageSize = 40
+    val pagedImages = remember(filteredImages, page) {
+        filteredImages.take(page * pageSize)
+    }
+    val gridRows = remember(pagedImages) { pagedImages.chunked(2) }
+    val exportImages = if (selectionMode && selectedImageIds.isNotEmpty()) {
+        filteredImages.filter { selectedImageIds.contains(it.id) }
+    } else {
+        filteredImages
+    }
+    val previewRows = remember(exportImages) { exportImages.chunked(2) }
+    val suggestions = remember(searchQuery, state.species, datasets, images) {
+        val query = searchQuery.trim()
+        if (query.isBlank()) {
+            emptyList()
+        } else {
+            val speciesNames = state.species.flatMap { listOfNotNull(it.name_cn, it.name_latin) }
+            val datasetNames = datasets.map { it.name }
+            val imageNames = images.mapNotNull { it.custom_name }
+            (speciesNames + datasetNames + imageNames)
+                .distinct()
+                .filter { it.contains(query, ignoreCase = true) }
+                .take(6)
+        }
+    }
+    val imageLoader = context.imageLoader
+    val thumbSize = 512
+    val unlinkedCount = remember(filteredImages, speciesMap) {
+        filteredImages.count { img ->
+            img.species_id.isNullOrBlank() || !speciesMap.containsKey(img.species_id)
+        }
+    }
+
+    LaunchedEffect(listState, filteredImages, page) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .distinctUntilChanged()
+            .collectLatest { lastVisible ->
+                if (lastVisible >= listState.layoutInfo.totalItemsCount - 4) {
+                    if (page * pageSize < filteredImages.size) {
+                        page += 1
+                    }
+                }
+            }
+    }
+
+    LaunchedEffect(pagedImages, filteredImages) {
+        if (filteredImages.isEmpty()) return@LaunchedEffect
+        val start = pagedImages.size
+        val end = (start + 12).coerceAtMost(filteredImages.size)
+        for (i in start until end) {
+            val img = filteredImages[i]
+            val request = ImageRequest.Builder(context)
+                .data(img.image_url)
+                .size(thumbSize)
+                .build()
+            imageLoader.enqueue(request)
+        }
+    }
+
+    LaunchedEffect(filteredImages, viewerIndex) {
+        if (viewerIndex != null && filteredImages.isEmpty()) {
+            viewerIndex = null
+        } else if (viewerIndex != null && viewerIndex!! >= filteredImages.size) {
+            viewerIndex = filteredImages.lastIndex
+        }
+    }
+
+    LaunchedEffect(filteredImages) {
+        page = 1
+    }
+
+    Scaffold(
+        floatingActionButton = {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                AnimatedVisibility(
+                    visible = showScrollTop,
+                    enter = fadeIn(tween(180)) + scaleIn(),
+                    exit = fadeOut(tween(180)) + scaleOut()
+                ) {
+                    SmallFloatingActionButton(
+                        onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "回到顶部")
+                    }
+                }
+                FloatingActionButton(
+                    onClick = {
+                        VibrationUtil.vibrate(context, 20)
+                        launcher.launch(arrayOf("image/*"))
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "导入图片", tint = MaterialTheme.colorScheme.onPrimary)
+                }
+            }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { padding ->
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.padding(padding),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp)
+        ) {
+            item {
+                Column {
+            AnimatedVisibility(visible = contentVisible, enter = enterUp) {
+                GradientHeaderCard(
+                    title = "图库",
+                    subtitle = "本地优先保存与管理采样照片",
+                    actionLabel = "导入图片",
+                    onActionClick = {
+                        VibrationUtil.vibrate(context, 20)
+                        launcher.launch(arrayOf("image/*"))
+                    }
+                )
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            AnimatedVisibility(visible = contentVisible, enter = enterUp) {
+                SectionHeader(title = "图片列表")
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SoftCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("导入到", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Box {
+                        OutlinedButton(
+                            onClick = { datasetMenuExpanded = true },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            val current = datasets.firstOrNull { it.id == selectedDatasetId }
+                            Text(current?.name ?: if (datasets.isEmpty()) "自动创建默认数据集" else "请选择数据集")
+                        }
+                        DropdownMenu(
+                            expanded = datasetMenuExpanded,
+                            onDismissRequest = { datasetMenuExpanded = false }
+                        ) {
+                            datasets.forEach { dataset ->
+                                DropdownMenuItem(
+                                    text = { Text(dataset.name) },
+                                    onClick = {
+                                        selectedDatasetId = dataset.id
+                                        datasetMenuExpanded = false
+                                    }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("管理数据集") },
+                                onClick = {
+                                    datasetMenuExpanded = false
+                                    navController.navigate("datasets")
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            ExposedDropdownMenuBox(
+                expanded = suggestionsExpanded && suggestions.isNotEmpty(),
+                onExpandedChange = { expanded -> suggestionsExpanded = expanded }
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = {
+                        searchQuery = it
+                        suggestionsExpanded = it.isNotBlank()
+                    },
+                    label = { Text("搜索物种/数据集/名称") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor()
+                )
+                ExposedDropdownMenu(
+                    expanded = suggestionsExpanded && suggestions.isNotEmpty(),
+                    onDismissRequest = { suggestionsExpanded = false }
+                ) {
+                    suggestions.forEach { suggestion ->
+                        DropdownMenuItem(
+                            text = { Text(suggestion) },
+                            onClick = {
+                                searchQuery = suggestion
+                                suggestionsExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TextButton(onClick = {
+                    selectedDatasetIds = emptySet()
+                    selectedCategories = emptySet()
+                    searchQuery = ""
+                }) {
+                    Text("查看全部")
+                }
+                if (selectedDatasetId.isNotBlank()) {
+                    OutlinedButton(
+                        onClick = { selectedDatasetIds = setOf(selectedDatasetId) },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        val name = datasetMap[selectedDatasetId]?.name ?: "当前数据集"
+                        Text("仅看 $name")
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        if (autoLinking) return@OutlinedButton
+                        if (unlinkedCount == 0) {
+                            scope.launch { snackbarHostState.showSnackbar("当前列表没有未关联的图片") }
+                            return@OutlinedButton
+                        }
+                        autoLinking = true
+                        scope.launch {
+                            val targetIds = filteredImages.map { it.id }.toSet()
+                            var matched = 0
+                            var total = 0
+                            LocalAppStore.update(context) { current ->
+                                val speciesIdSet = current.species.map { it.id }.toSet()
+                                val updatedImages = current.images.map { img ->
+                                    val missingSpecies = img.species_id.isNullOrBlank() || !speciesIdSet.contains(img.species_id)
+                                    if (img.id in targetIds && missingSpecies) {
+                                        total += 1
+                                        val autoId = matchSpeciesIdByName(img.custom_name, current.species)
+                                        if (autoId != null) {
+                                            matched += 1
+                                            img.copy(species_id = autoId)
+                                        } else {
+                                            img
+                                        }
+                                    } else {
+                                        img
+                                    }
+                                }
+                                current.copy(images = updatedImages)
+                            }
+                            autoLinking = false
+                            val notMatched = total - matched
+                            snackbarHostState.showSnackbar("已自动关联 $matched 张，未匹配 $notMatched 张")
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !autoLinking
+                ) {
+                    Text(if (autoLinking) "关联中..." else "按名称一键关联")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        VibrationUtil.vibrate(context, 20)
+                        datasetFilterDialog = true
+                    },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(if (selectedDatasetIds.isEmpty()) "筛选数据集" else "已筛选数据集")
+                }
+                OutlinedButton(
+                    onClick = {
+                        VibrationUtil.vibrate(context, 20)
+                        categoryFilterDialog = true
+                    },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(if (selectedCategories.isEmpty()) "筛选分类" else "已筛选分类")
+                }
+                Box {
+                    Button(
+                        onClick = {
+                            VibrationUtil.vibrate(context, 20)
+                            exportMenuExpanded = true
+                        },
+                        enabled = !exporting,
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text(if (exporting) "导出中..." else "导出")
+                    }
+                    DropdownMenu(
+                        expanded = exportMenuExpanded,
+                        onDismissRequest = { exportMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("导出图片（ZIP）") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                if (selectionMode && selectedImageIds.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("请先勾选图片") }
+                                    return@DropdownMenuItem
+                                }
+                                if (exportImages.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+                                    return@DropdownMenuItem
+                                }
+                                exportPreviewMode = ExportMode.ZIP
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出鉴定报告（Word）") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                if (selectionMode && selectedImageIds.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("请先勾选图片") }
+                                    return@DropdownMenuItem
+                                }
+                                if (exportImages.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+                                    return@DropdownMenuItem
+                                }
+                                exportPreviewMode = ExportMode.WORD
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出图片（文件夹）") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                if (selectionMode && selectedImageIds.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("请先勾选图片") }
+                                    return@DropdownMenuItem
+                                }
+                                if (exportImages.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+                                    return@DropdownMenuItem
+                                }
+                                exportPreviewMode = ExportMode.FOLDER
+                            }
+                        )
+                    }
+                }
+                IconButton(onClick = { viewMode = if (viewMode == "grid") "list" else "grid" }) {
+                    Icon(
+                        imageVector = if (viewMode == "grid") Icons.Default.ViewList else Icons.Default.ViewModule,
+                        contentDescription = null
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (selectionMode) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("已选 ${selectedImageIds.size} 张", style = MaterialTheme.typography.labelMedium)
+                    TextButton(onClick = {
+                        selectedImageIds = filteredImages.map { it.id }.toSet()
+                    }) {
+                        Text("全选")
+                    }
+                    TextButton(onClick = { selectedImageIds = emptySet() }) {
+                        Text("清空")
+                    }
+                    TextButton(onClick = {
+                        selectionMode = false
+                        selectedImageIds = emptySet()
+                    }) {
+                        Text("退出选择")
+                    }
+                    TextButton(
+                        enabled = selectedImageIds.isNotEmpty(),
+                        onClick = { deleteImageIds = selectedImageIds }
+                    ) {
+                        Text("删除")
+                    }
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = {
+                        selectionMode = true
+                        selectedImageIds = emptySet()
+                    }) {
+                        Text("选择图片")
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+                }
+            }
+
+            if (filteredImages.isEmpty()) {
+                item {
+                    EmptyStateCard(
+                        title = "图库暂无内容",
+                        subtitle = "导入图片后可进行查看与导出。",
+                        actionLabel = "导入图片",
+                        onActionClick = {
+                            VibrationUtil.vibrate(context, 20)
+                            launcher.launch(arrayOf("image/*"))
+                        }
+                    )
+                }
+            } else if (viewMode == "grid") {
+                itemsIndexed(gridRows) { rowIndex, row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        row.forEachIndexed { colIndex, img ->
+                            val name = img.custom_name ?: "未命名"
+                            val speciesName = speciesMap[img.species_id]?.name_cn
+                            val isSelected = selectedImageIds.contains(img.id)
+                            val toggleSelect = {
+                                selectedImageIds = if (isSelected) {
+                                    selectedImageIds - img.id
+                                } else {
+                                    selectedImageIds + img.id
+                                }
+                            }
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selectionMode) {
+                                                toggleSelect()
+                                            } else {
+                                                viewerIndex = rowIndex * 2 + colIndex
+                                            }
+                                        },
+                                        onDoubleClick = if (selectionMode) {
+                                            null
+                                        } else {
+                                            {
+                                                VibrationUtil.vibrate(context, 20)
+                                                renameTarget = img
+                                                renameName = name
+                                                renameSpeciesId = img.species_id
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (selectionMode) {
+                                                toggleSelect()
+                                            } else {
+                                                VibrationUtil.vibrate(context, 20)
+                                                renameTarget = img
+                                                renameName = name
+                                                renameSpeciesId = img.species_id
+                                            }
+                                        }
+                                    )
+                            ) {
+                                Box {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(img.image_url)
+                                            .size(thumbSize)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = name,
+                                        modifier = Modifier
+                                            .aspectRatio(1f)
+                                            .clip(RoundedCornerShape(12.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    if (selectionMode) {
+                                        Checkbox(
+                                            checked = isSelected,
+                                            onCheckedChange = { toggleSelect() },
+                                            modifier = Modifier.align(Alignment.TopEnd)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                                if (!speciesName.isNullOrBlank() && speciesName != name) {
+                                    Text(
+                                        text = speciesName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                        if (row.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                    if (rowIndex < gridRows.lastIndex) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                }
+            } else {
+                itemsIndexed(pagedImages) { index, img ->
+                    val name = img.custom_name ?: "未命名"
+                    val speciesName = speciesMap[img.species_id]?.name_cn
+                    val datasetName = datasetMap[img.dataset_id]?.name ?: "未归档"
+                    val isSelected = selectedImageIds.contains(img.id)
+                    val toggleSelect = {
+                        selectedImageIds = if (isSelected) {
+                            selectedImageIds - img.id
+                        } else {
+                            selectedImageIds + img.id
+                        }
+                    }
+                    SoftCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    if (selectionMode) {
+                                        toggleSelect()
+                                    } else {
+                                        viewerIndex = index
+                                    }
+                                },
+                                onDoubleClick = if (selectionMode) {
+                                    null
+                                } else {
+                                    {
+                                        VibrationUtil.vibrate(context, 20)
+                                        renameTarget = img
+                                        renameName = name
+                                        renameSpeciesId = img.species_id
+                                    }
+                                },
+                                onLongClick = {
+                                    if (selectionMode) {
+                                        toggleSelect()
+                                    } else {
+                                        VibrationUtil.vibrate(context, 20)
+                                        renameTarget = img
+                                        renameName = name
+                                        renameSpeciesId = img.species_id
+                                    }
+                                }
+                            )
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(img.image_url)
+                                    .size(thumbSize)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = name,
+                                modifier = Modifier
+                                    .size(96.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier
+                                )
+                                if (!speciesName.isNullOrBlank() && speciesName != name) {
+                                    Text(
+                                        text = speciesName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = datasetName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (selectionMode) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { toggleSelect() }
+                                )
+                            }
+                        }
+                    }
+                    if (index < pagedImages.lastIndex) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+                }
+            }
+            item { Spacer(modifier = Modifier.height(80.dp)) }
+        }
+    }
+
+    val previewMode = exportPreviewMode
+    if (previewMode != null) {
+        val previewTitle = when (previewMode) {
+            ExportMode.ZIP -> "导出图片（ZIP）"
+            ExportMode.WORD -> "导出鉴定报告（Word）"
+            ExportMode.FOLDER -> "导出图片（文件夹）"
+        }
+        val previewScroll = rememberScrollState()
+        Dialog(onDismissRequest = { exportPreviewMode = null }) {
+            SoftCard(modifier = Modifier.fillMaxWidth()) {
+                Text(previewTitle, style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("将导出 ${exportImages.size} 张图片，请确认。", style = MaterialTheme.typography.bodySmall)
+                Spacer(modifier = Modifier.height(12.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(previewScroll),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    previewRows.forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            row.forEach { img ->
+                                Column(modifier = Modifier.weight(1f)) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(img.image_url)
+                                            .size(thumbSize)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = img.custom_name,
+                                        modifier = Modifier
+                                            .aspectRatio(1f)
+                                            .clip(RoundedCornerShape(12.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = img.custom_name ?: "未命名",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                            if (row.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { exportPreviewMode = null }) {
+                        Text("取消")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            if (exportImages.isEmpty()) {
+                                scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+                                exportPreviewMode = null
+                                return@Button
+                            }
+                            pendingExportItems = exportImages.mapIndexed { index, img ->
+                                ExportService.ExportItem(
+                                    source = img.image_url,
+                                    name = img.custom_name ?: "图片${index + 1}"
+                                )
+                            }
+                            exportPreviewMode = null
+                            when (previewMode) {
+                                ExportMode.ZIP -> zipExporter.launch("图片导出_${exportTimestamp()}.zip")
+                                ExportMode.WORD -> docExporter.launch("鉴定报告_${exportTimestamp()}.docx")
+                                ExportMode.FOLDER -> folderExporter.launch(null)
+                            }
+                        }
+                    ) {
+                        Text("确认导出")
+                    }
+                }
+            }
+        }
+    }
+
+    if (datasetFilterDialog) {
+        AlertDialog(
+            onDismissRequest = { datasetFilterDialog = false },
+            title = { Text("筛选数据集") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    datasets.forEach { dataset ->
+                        val checked = selectedDatasetIds.contains(dataset.id)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { value ->
+                                    selectedDatasetIds = if (value) {
+                                        selectedDatasetIds + dataset.id
+                                    } else {
+                                        selectedDatasetIds - dataset.id
+                                    }
+                                }
+                            )
+                            Text(dataset.name)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { datasetFilterDialog = false }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    selectedDatasetIds = emptySet()
+                    datasetFilterDialog = false
+                }) { Text("清空") }
+            }
+        )
+    }
+
+    if (categoryFilterDialog) {
+        AlertDialog(
+            onDismissRequest = { categoryFilterDialog = false },
+            title = { Text("筛选分类") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    categories.forEach { category ->
+                        val checked = selectedCategories.contains(category)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { value ->
+                                    selectedCategories = if (value) {
+                                        selectedCategories + category
+                                    } else {
+                                        selectedCategories - category
+                                    }
+                                }
+                            )
+                            Text(category)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { categoryFilterDialog = false }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    selectedCategories = emptySet()
+                    categoryFilterDialog = false
+                }) { Text("清空") }
+            }
+        )
+    }
+
+    if (renameTarget != null) {
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("重命名与关联") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = renameName,
+                        onValueChange = { renameName = it },
+                        label = { Text("物种名称") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SpeciesAutocomplete(
+                        initialValue = renameName,
+                        onSpeciesSelected = { species ->
+                            renameName = species.name_cn ?: renameName
+                            renameSpeciesId = species.id
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val target = renameTarget ?: return@Button
+                    VibrationUtil.vibrate(context, 20)
+                    scope.launch {
+                        LocalAppStore.updateImage(context, target.id) { img ->
+                            img.copy(
+                                custom_name = renameName.trim().ifBlank { img.custom_name },
+                                species_id = renameSpeciesId
+                            )
+                        }
+                    }
+                    renameTarget = null
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("取消") }
+            }
+        )
+    }
+
+    if (deleteImageIds.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { deleteImageIds = emptySet() },
+            title = { Text("删除图片") },
+            text = { Text("将删除选中的图片，是否继续？") },
+            confirmButton = {
+                Button(onClick = {
+                    val ids = deleteImageIds.toList()
+                    deleteImageIds = emptySet()
+                    selectionMode = false
+                    selectedImageIds = emptySet()
+                    scope.launch {
+                        ids.forEach { id ->
+                            val img = state.images.firstOrNull { it.id == id } ?: return@forEach
+                            StorageManager.deleteStoredUri(context, img.image_url)
+                            LocalAppStore.deleteImage(context, id)
+                        }
+                    }
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteImageIds = emptySet() }) { Text("取消") }
+            }
+        )
+    }
+
+    val currentIndex = viewerIndex
+    if (currentIndex != null && filteredImages.isNotEmpty()) {
+        val safeIndex = currentIndex.coerceIn(0, filteredImages.lastIndex)
+        val pagerState = rememberPagerState(
+            initialPage = safeIndex,
+            pageCount = { filteredImages.size }
+        )
+        var currentZoomFraction by remember { mutableStateOf(0f) }
+        LaunchedEffect(safeIndex) {
+            if (pagerState.currentPage != safeIndex) {
+                pagerState.scrollToPage(safeIndex)
+            }
+        }
+        LaunchedEffect(pagerState.currentPage) {
+            if (viewerIndex != pagerState.currentPage) {
+                viewerIndex = pagerState.currentPage
+            }
+        }
+        val activeIndex = pagerState.currentPage.coerceIn(0, filteredImages.lastIndex)
+        val current = filteredImages[activeIndex]
+        val speciesName = speciesMap[current.species_id]?.name_cn ?: "未关联物种"
+        val datasetName = datasetMap[current.dataset_id]?.name ?: "未归档"
+        val allowPagerScroll by remember(currentZoomFraction) {
+            derivedStateOf { currentZoomFraction <= 0.01f }
+        }
+
+        Dialog(
+            onDismissRequest = { viewerIndex = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                SoftCard(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("图片浏览", style = MaterialTheme.typography.titleMedium)
+                        IconButton(onClick = { viewerIndex = null }) {
+                            Icon(Icons.Default.Close, contentDescription = null)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                    ) {
+                        HorizontalPager(
+                            state = pagerState,
+                            userScrollEnabled = allowPagerScroll,
+                            key = { page -> filteredImages[page].id },
+                            modifier = Modifier.fillMaxSize()
+                        ) { page ->
+                            val img = filteredImages[page]
+                            val zoomState = rememberZoomableImageState(
+                                rememberZoomableState(
+                                    zoomSpec = me.saket.telephoto.zoomable.ZoomSpec(maxZoomFactor = 4f)
+                                )
+                            )
+                            val zoomFraction = zoomState.zoomableState.zoomFraction ?: 0f
+                            val isCurrent = page == pagerState.currentPage
+                            LaunchedEffect(isCurrent, zoomFraction) {
+                                if (isCurrent) {
+                                    currentZoomFraction = zoomFraction
+                                }
+                            }
+                            ZoomableAsyncImage(
+                                model = img.image_url,
+                                contentDescription = img.custom_name,
+                                modifier = Modifier.fillMaxSize(),
+                                state = zoomState,
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(current.custom_name ?: "未命名", style = MaterialTheme.typography.titleSmall)
+                    Text(speciesName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(datasetName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("缩放提示", style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            text = "双指缩放 / 双击放大",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                if (activeIndex > 0) {
+                                    scope.launch { pagerState.animateScrollToPage(activeIndex - 1) }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.ChevronLeft, contentDescription = null)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                VibrationUtil.vibrate(context, 20)
+                                renameTarget = current
+                                renameName = current.custom_name ?: ""
+                                renameSpeciesId = current.species_id
+                            }) {
+                                Icon(Icons.Default.Edit, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("重命名")
+                            }
+                            OutlinedButton(onClick = { deleteImageIds = setOf(current.id) }) {
+                                Text("删除")
+                            }
+                            OutlinedButton(onClick = { viewerIndex = null }) {
+                                Text("关闭")
+                            }
+                        }
+                        IconButton(
+                            onClick = {
+                                if (activeIndex < filteredImages.lastIndex) {
+                                    scope.launch { pagerState.animateScrollToPage(activeIndex + 1) }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.ChevronRight, contentDescription = null)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun queryDisplayName(context: Context, uri: Uri): String? {
+    val cursor = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+    cursor?.use {
+        if (it.moveToFirst()) {
+            return it.getString(0)
+        }
+    }
+    return null
+}
+
+private fun safeBaseName(name: String?): String? {
+    if (name.isNullOrBlank()) return null
+    return name.substringBeforeLast('.', name).trim().ifBlank { null }
+}
+
+private fun exportTimestamp(): String {
+    return SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())
+}
+
+private const val DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+private enum class ExportMode {
+    ZIP,
+    WORD,
+    FOLDER
+}

@@ -1,0 +1,6 @@
+# Copy this file outside the repository and fill in the existing release key.
+# Never commit the real signing.properties or the keystore.
+storeFile=E:/path/to/ripple-chronicles.keystore
+storePassword=change-me
+keyAlias=change-me
+keyPassword=change-me
