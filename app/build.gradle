@@ -146,9 +146,9 @@ dependencies {
     implementation 'androidx.navigation:navigation-compose:2.7.5'
 
     // Supabase
-    implementation "io.github.jan-tennert.supabase:postgrest-kt:1.4.7"
-    implementation "io.github.jan-tennert.supabase:storage-kt:1.4.7"
-    implementation "io.github.jan-tennert.supabase:gotrue-kt:1.4.7"
+    implementation "io.github.jan-tennert.supabase:postgrest-kt:3.7.0"
+    implementation "io.github.jan-tennert.supabase:storage-kt:3.7.0"
+    implementation "io.github.jan-tennert.supabase:gotrue-kt:3.7.0"
     implementation "io.ktor:ktor-client-android:2.3.6"
 
     // Image Loading
