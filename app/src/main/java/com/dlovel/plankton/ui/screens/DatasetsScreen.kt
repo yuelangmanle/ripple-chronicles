@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -67,6 +68,7 @@ fun DatasetsScreen() {
     var chainAction by remember { mutableStateOf("") }
     var chainNote by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<Dataset?>(null) }
+    var actionMenuDatasetId by remember { mutableStateOf<String?>(null) }
     var backupTarget by remember { mutableStateOf<Dataset?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
@@ -268,7 +270,7 @@ fun DatasetsScreen() {
                         SoftCard(modifier = Modifier.fillMaxWidth()) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = androidx.compose.ui.Alignment.Top
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                             ) {
                                 Text(
                                     ds.name,
@@ -277,51 +279,66 @@ fun DatasetsScreen() {
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
-                                    TextButton(onClick = { beginEdit(ds) }) {
-                                        Text("编辑")
+                                Box {
+                                    IconButton(onClick = { actionMenuDatasetId = ds.id }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "数据集操作")
                                     }
-                                    TextButton(
-                                        onClick = {
-                                            backupTarget = ds
-                                            val fileName = "数据集_${ds.name}_${System.currentTimeMillis()}.zip"
-                                            backupLauncher.launch(fileName)
-                                        },
-                                        enabled = !exporting
+                                    DropdownMenu(
+                                        expanded = actionMenuDatasetId == ds.id,
+                                        onDismissRequest = { actionMenuDatasetId = null }
                                     ) {
-                                        Text("备份")
-                                    }
-                                    TextButton(
-                                        onClick = {
-                                            scope.launch {
-                                                exporting = true
-                                                val images = state.images.filter { it.dataset_id == ds.id }
-                                                val result = DatasetTransferService.exportDatasetToCache(
-                                                    context,
-                                                    ds,
-                                                    images,
-                                                    speciesMap
-                                                )
-                                                exporting = false
-                                                if (result.error != null || result.uri == null) {
-                                                    snackbarHostState.showSnackbar(result.error ?: "分享失败")
-                                                } else {
-                                                    ShareUtils.shareUri(
+                                        DropdownMenuItem(
+                                            text = { Text("编辑") },
+                                            onClick = {
+                                                actionMenuDatasetId = null
+                                                beginEdit(ds)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("备份") },
+                                            enabled = !exporting,
+                                            onClick = {
+                                                actionMenuDatasetId = null
+                                                backupTarget = ds
+                                                val fileName = "数据集_${ds.name}_${System.currentTimeMillis()}.zip"
+                                                backupLauncher.launch(fileName)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("分享") },
+                                            enabled = !exporting,
+                                            onClick = {
+                                                actionMenuDatasetId = null
+                                                scope.launch {
+                                                    exporting = true
+                                                    val images = state.images.filter { it.dataset_id == ds.id }
+                                                    val result = DatasetTransferService.exportDatasetToCache(
                                                         context,
-                                                        result.uri,
-                                                        "application/zip",
-                                                        "分享数据集"
+                                                        ds,
+                                                        images,
+                                                        speciesMap
                                                     )
+                                                    exporting = false
+                                                    if (result.error != null || result.uri == null) {
+                                                        snackbarHostState.showSnackbar(result.error ?: "分享失败")
+                                                    } else {
+                                                        ShareUtils.shareUri(
+                                                            context,
+                                                            result.uri,
+                                                            "application/zip",
+                                                            "分享数据集"
+                                                        )
+                                                    }
                                                 }
                                             }
-                                        },
-                                        enabled = !exporting
-                                    ) {
-                                        Text("分享")
-                                    }
-                                    TextButton(onClick = { deleteTarget = ds }) {
-                                        Text("删除")
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("删除") },
+                                            onClick = {
+                                                actionMenuDatasetId = null
+                                                deleteTarget = ds
+                                            }
+                                        )
                                     }
                                 }
                             }

@@ -71,6 +71,7 @@ import com.dlovel.plankton.util.VibrationUtil
 import com.dlovel.plankton.util.matchSpeciesIdByName
 import com.dlovel.plankton.util.matchesGalleryQuery
 import com.dlovel.plankton.util.matchCandidateSpeciesIds
+import com.dlovel.plankton.util.speciesIdAfterQueryChange
 import com.dlovel.plankton.util.visibleSelectionIds
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -392,7 +393,9 @@ fun GalleryScreen(navController: NavController) {
         if (query.isBlank()) {
             emptyList()
         } else {
-            val speciesNames = state.species.flatMap { listOfNotNull(it.name_cn, it.name_latin) }
+            val speciesNames = state.species.flatMap {
+                listOfNotNull(it.name_cn, it.name_latin) + it.synonyms
+            }
             val datasetNames = datasets.map { it.name }
             val imageNames = images.mapNotNull { it.custom_name }
             (speciesNames + datasetNames + imageNames)
@@ -568,7 +571,17 @@ fun GalleryScreen(navController: NavController) {
                     label = { Text("搜索物种/数据集/名称") },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .menuAnchor()
+                        .menuAnchor(),
+                    trailingIcon = if (searchQuery.isNotBlank()) {
+                        {
+                            IconButton(onClick = {
+                                searchQuery = ""
+                                suggestionsExpanded = false
+                            }) {
+                                Icon(Icons.Default.Close, contentDescription = "清空搜索")
+                            }
+                        }
+                    } else null
                 )
                 ExposedDropdownMenu(
                     expanded = suggestionsExpanded && suggestions.isNotEmpty(),
@@ -1259,14 +1272,16 @@ fun GalleryScreen(navController: NavController) {
             title = { Text("重命名与关联") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = renameName,
-                        onValueChange = { renameName = it },
-                        label = { Text("物种名称") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
                     SpeciesAutocomplete(
                         initialValue = renameName,
+                        onQueryChanged = { nextQuery ->
+                            renameSpeciesId = speciesIdAfterQueryChange(
+                                previousQuery = renameName,
+                                nextQuery = nextQuery,
+                                selectedSpeciesId = renameSpeciesId
+                            )
+                            renameName = nextQuery
+                        },
                         onSpeciesSelected = { species ->
                             renameName = species.name_cn ?: renameName
                             renameSpeciesId = species.id

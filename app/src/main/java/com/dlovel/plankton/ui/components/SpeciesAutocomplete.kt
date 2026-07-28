@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,21 +20,24 @@ import androidx.compose.ui.window.Popup
 import com.dlovel.plankton.data.Species
 import com.dlovel.plankton.data.LocalAppStore
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SpeciesAutocomplete(
     initialValue: String = "",
     onSpeciesSelected: (Species) -> Unit,
+    onQueryChanged: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var query by remember { mutableStateOf(initialValue) }
     var results by remember { mutableStateOf<List<Species>>(emptyList()) }
     var showDropdown by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val state by LocalAppStore.state.collectAsState()
+
+    LaunchedEffect(initialValue) {
+        query = initialValue
+    }
 
     LaunchedEffect(query) {
         if (query.length < 1) {
@@ -44,16 +48,14 @@ fun SpeciesAutocomplete(
         
         delay(300)
         isLoading = true
-        scope.launch {
-            val data = state.species.filter { species ->
-                val nameCn = species.name_cn ?: ""
-                val nameLatin = species.name_latin ?: ""
-                nameCn.contains(query) || nameLatin.contains(query, ignoreCase = true)
-            }.take(10)
-            results = data
-            showDropdown = data.isNotEmpty()
-            isLoading = false
-        }
+        val normalizedQuery = query.trim()
+        val data = state.species.filter { species ->
+            val fields = listOfNotNull(species.name_cn, species.name_latin) + species.synonyms
+            fields.any { it.contains(normalizedQuery, ignoreCase = true) }
+        }.take(10)
+        results = data
+        showDropdown = data.isNotEmpty()
+        isLoading = false
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -61,13 +63,23 @@ fun SpeciesAutocomplete(
             value = query,
             onValueChange = { 
                 query = it
+                onQueryChanged(it)
                 if (it.isEmpty()) showDropdown = false
             },
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("搜索物种...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
-                if (isLoading) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                when {
+                    isLoading -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    query.isNotBlank() -> IconButton(onClick = {
+                        query = ""
+                        onQueryChanged("")
+                        showDropdown = false
+                    }) {
+                        Icon(Icons.Default.Clear, contentDescription = "清空物种")
+                    }
+                }
             },
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
@@ -98,6 +110,7 @@ fun SpeciesAutocomplete(
                                     .fillMaxWidth()
                                     .clickable {
                                         query = species.name_cn ?: ""
+                                        onQueryChanged(query)
                                         onSpeciesSelected(species)
                                         showDropdown = false
                                     }
