@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import com.dlovel.plankton.data.Species
 import com.dlovel.plankton.data.LocalAppStore
+import com.dlovel.plankton.util.textFieldValueAtEnd
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -32,7 +33,7 @@ fun SpeciesAutocomplete(
     onQueryChanged: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var query by remember { mutableStateOf(initialValue) }
+    var query by remember { mutableStateOf(textFieldValueAtEnd(initialValue)) }
     var results by remember { mutableStateOf<List<Species>>(emptyList()) }
     var showDropdown by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
@@ -41,11 +42,13 @@ fun SpeciesAutocomplete(
     val state by LocalAppStore.state.collectAsState()
 
     LaunchedEffect(initialValue) {
-        query = initialValue
+        if (initialValue != query.text) {
+            query = textFieldValueAtEnd(initialValue)
+        }
     }
 
-    LaunchedEffect(query) {
-        if (query.length < 1) {
+    LaunchedEffect(query.text) {
+        if (query.text.isBlank()) {
             results = emptyList()
             showDropdown = false
             return@LaunchedEffect
@@ -53,7 +56,7 @@ fun SpeciesAutocomplete(
         
         delay(300)
         isLoading = true
-        val normalizedQuery = query.trim()
+        val normalizedQuery = query.text.trim()
         val data = state.species.filter { species ->
             val fields = listOfNotNull(species.name_cn, species.name_latin) + species.synonyms
             fields.any { it.contains(normalizedQuery, ignoreCase = true) }
@@ -66,10 +69,10 @@ fun SpeciesAutocomplete(
     Column(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = query,
-            onValueChange = { 
-                query = it
-                onQueryChanged(it)
-                if (it.isEmpty()) showDropdown = false
+            onValueChange = { nextValue ->
+                query = nextValue
+                onQueryChanged(nextValue.text)
+                if (nextValue.text.isBlank()) showDropdown = false
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -79,8 +82,8 @@ fun SpeciesAutocomplete(
             trailingIcon = {
                 when {
                     isLoading -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    query.isNotBlank() -> IconButton(onClick = {
-                        query = ""
+                    query.text.isNotBlank() -> IconButton(onClick = {
+                        query = textFieldValueAtEnd("")
                         onQueryChanged("")
                         showDropdown = false
                     }) {
@@ -116,8 +119,9 @@ fun SpeciesAutocomplete(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        query = species.name_cn ?: ""
-                                        onQueryChanged(query)
+                                        val selectedName = species.name_cn.orEmpty()
+                                        query = textFieldValueAtEnd(selectedName)
+                                        onQueryChanged(selectedName)
                                         onSpeciesSelected(species)
                                         showDropdown = false
                                         scope.launch {

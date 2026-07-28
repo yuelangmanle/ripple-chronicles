@@ -74,6 +74,7 @@ import com.dlovel.plankton.util.matchSpeciesIdByName
 import com.dlovel.plankton.util.matchesGalleryQuery
 import com.dlovel.plankton.util.matchCandidateSpeciesIds
 import com.dlovel.plankton.util.speciesIdAfterQueryChange
+import com.dlovel.plankton.util.textFieldValueAtEnd
 import com.dlovel.plankton.util.visibleSelectionIds
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -109,7 +110,8 @@ fun GalleryScreen(navController: NavController) {
     var datasetMenuExpanded by remember { mutableStateOf(false) }
     var selectedDatasetId by remember { mutableStateOf("") }
     var viewMode by remember { mutableStateOf("grid") }
-    var searchQuery by remember { mutableStateOf("") }
+    var searchInput by remember { mutableStateOf(textFieldValueAtEnd("")) }
+    val searchQuery = searchInput.text
     var suggestionsExpanded by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
     var datasetFilterDialog by remember { mutableStateOf(false) }
@@ -567,10 +569,10 @@ fun GalleryScreen(navController: NavController) {
                 onExpandedChange = { expanded -> suggestionsExpanded = expanded }
             ) {
                 OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = {
-                        searchQuery = it
-                        suggestionsExpanded = it.isNotBlank()
+                    value = searchInput,
+                    onValueChange = { nextValue ->
+                        searchInput = nextValue
+                        suggestionsExpanded = nextValue.text.isNotBlank()
                     },
                     label = { Text("搜索物种/数据集/名称") },
                     modifier = Modifier
@@ -580,7 +582,7 @@ fun GalleryScreen(navController: NavController) {
                     trailingIcon = if (searchQuery.isNotBlank()) {
                         {
                             IconButton(onClick = {
-                                searchQuery = ""
+                                searchInput = textFieldValueAtEnd("")
                                 suggestionsExpanded = false
                             }) {
                                 Icon(Icons.Default.Close, contentDescription = "清空搜索")
@@ -596,7 +598,7 @@ fun GalleryScreen(navController: NavController) {
                         DropdownMenuItem(
                             text = { Text(suggestion) },
                             onClick = {
-                                searchQuery = suggestion
+                                searchInput = textFieldValueAtEnd(suggestion)
                                 suggestionsExpanded = false
                                 scope.launch {
                                     delay(50)
@@ -615,7 +617,7 @@ fun GalleryScreen(navController: NavController) {
                     selectedDatasetIds = emptySet()
                     selectedCategories = emptySet()
                     favoritesOnly = false
-                    searchQuery = ""
+                    searchInput = textFieldValueAtEnd("")
                 }) {
                     Text("查看全部")
                 }
@@ -1281,21 +1283,23 @@ fun GalleryScreen(navController: NavController) {
             title = { Text("重命名与关联") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SpeciesAutocomplete(
-                        initialValue = renameName,
-                        onQueryChanged = { nextQuery ->
-                            renameSpeciesId = speciesIdAfterQueryChange(
-                                previousQuery = renameName,
-                                nextQuery = nextQuery,
-                                selectedSpeciesId = renameSpeciesId
-                            )
-                            renameName = nextQuery
-                        },
-                        onSpeciesSelected = { species ->
-                            renameName = species.name_cn ?: renameName
-                            renameSpeciesId = species.id
-                        }
-                    )
+                    key(renameTarget?.id) {
+                        SpeciesAutocomplete(
+                            initialValue = renameName,
+                            onQueryChanged = { nextQuery ->
+                                renameSpeciesId = speciesIdAfterQueryChange(
+                                    previousQuery = renameName,
+                                    nextQuery = nextQuery,
+                                    selectedSpeciesId = renameSpeciesId
+                                )
+                                renameName = nextQuery
+                            },
+                            onSpeciesSelected = { species ->
+                                renameName = species.name_cn ?: renameName
+                                renameSpeciesId = species.id
+                            }
+                        )
+                    }
                     OutlinedTextField(
                         value = confidenceText,
                         onValueChange = { value ->
@@ -1368,6 +1372,10 @@ fun GalleryScreen(navController: NavController) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SpeciesAutocomplete(
                         initialValue = batchSpeciesName,
+                        onQueryChanged = { nextQuery ->
+                            batchSpeciesName = nextQuery
+                            batchSpeciesId = null
+                        },
                         onSpeciesSelected = { species ->
                             batchSpeciesId = species.id
                             batchSpeciesName = species.name_cn.orEmpty()

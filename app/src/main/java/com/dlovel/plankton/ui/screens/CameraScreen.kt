@@ -891,13 +891,20 @@ fun CameraScreen(navController: NavController) {
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
                         value = customName,
-                        onValueChange = { customName = it },
+                        onValueChange = {
+                            customName = it
+                            selectedSpeciesId = null
+                        },
                         label = { Text("图片名称") },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     SpeciesAutocomplete(
                         initialValue = customName,
+                        onQueryChanged = { nextQuery ->
+                            customName = nextQuery
+                            selectedSpeciesId = null
+                        },
                         onSpeciesSelected = { species ->
                             customName = species.name_cn ?: customName
                             selectedSpeciesId = species.id
