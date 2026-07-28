@@ -13,6 +13,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -20,6 +22,7 @@ import androidx.compose.ui.window.Popup
 import com.dlovel.plankton.data.Species
 import com.dlovel.plankton.data.LocalAppStore
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +36,8 @@ fun SpeciesAutocomplete(
     var results by remember { mutableStateOf<List<Species>>(emptyList()) }
     var showDropdown by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
     val state by LocalAppStore.state.collectAsState()
 
     LaunchedEffect(initialValue) {
@@ -66,7 +71,9 @@ fun SpeciesAutocomplete(
                 onQueryChanged(it)
                 if (it.isEmpty()) showDropdown = false
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focusRequester),
             placeholder = { Text("搜索物种...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
@@ -113,6 +120,10 @@ fun SpeciesAutocomplete(
                                         onQueryChanged(query)
                                         onSpeciesSelected(species)
                                         showDropdown = false
+                                        scope.launch {
+                                            delay(50)
+                                            focusRequester.requestFocus()
+                                        }
                                     }
                                     .padding(16.dp)
                             ) {

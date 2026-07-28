@@ -43,6 +43,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -74,6 +76,7 @@ import com.dlovel.plankton.util.matchCandidateSpeciesIds
 import com.dlovel.plankton.util.speciesIdAfterQueryChange
 import com.dlovel.plankton.util.visibleSelectionIds
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.collectLatest
@@ -108,6 +111,7 @@ fun GalleryScreen(navController: NavController) {
     var viewMode by remember { mutableStateOf("grid") }
     var searchQuery by remember { mutableStateOf("") }
     var suggestionsExpanded by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
     var datasetFilterDialog by remember { mutableStateOf(false) }
     var categoryFilterDialog by remember { mutableStateOf(false) }
     var selectedDatasetIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -571,6 +575,7 @@ fun GalleryScreen(navController: NavController) {
                     label = { Text("搜索物种/数据集/名称") },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .focusRequester(searchFocusRequester)
                         .menuAnchor(),
                     trailingIcon = if (searchQuery.isNotBlank()) {
                         {
@@ -593,6 +598,10 @@ fun GalleryScreen(navController: NavController) {
                             onClick = {
                                 searchQuery = suggestion
                                 suggestionsExpanded = false
+                                scope.launch {
+                                    delay(50)
+                                    searchFocusRequester.requestFocus()
+                                }
                             }
                         )
                     }
