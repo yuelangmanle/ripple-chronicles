@@ -10,6 +10,11 @@ import com.dlovel.plankton.data.Dataset
 import com.dlovel.plankton.data.PlanktonImage
 import com.dlovel.plankton.data.SampleMetadata
 import com.dlovel.plankton.data.Species
+import com.dlovel.plankton.data.SamplingEvent
+import com.dlovel.plankton.data.ImageAnnotation
+import com.dlovel.plankton.data.ScaleCalibration
+import com.dlovel.plankton.data.ImageQuality
+import com.dlovel.plankton.data.IdentificationHistory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -48,6 +53,9 @@ object DatasetTransferService {
         val name: String,
         val description: String? = null,
         val metadata: SampleMetadata = SampleMetadata(),
+        val samplingEvents: List<SamplingEvent> = emptyList(),
+        val version: Int = 1,
+        val updated_at: Long = System.currentTimeMillis(),
         val created_at: Long
     )
 
@@ -63,6 +71,11 @@ object DatasetTransferService {
         val reviewStatus: String = "UNREVIEWED",
         val reviewNote: String? = null,
         val reviewedAt: Long? = null,
+        val candidateSpeciesIds: List<String> = emptyList(),
+        val annotations: List<ImageAnnotation> = emptyList(),
+        val scaleCalibration: ScaleCalibration? = null,
+        val quality: ImageQuality = ImageQuality(),
+        val identificationHistory: List<IdentificationHistory> = emptyList(),
         val createdAt: Long,
         val byteSize: Long? = null,
         val sha256: String? = null
@@ -96,7 +109,9 @@ object DatasetTransferService {
         val description: String?,
         val imageCount: Int,
         val totalBytes: Long,
-        val imageNames: List<String>
+        val imageNames: List<String>,
+        val datasetVersion: Int = 1,
+        val updatedAt: Long = 0L
     )
 
     data class PreviewResult(
@@ -132,7 +147,9 @@ object DatasetTransferService {
                     description = manifest.dataset.description,
                     imageCount = imageNames.size,
                     totalBytes = totalBytes,
-                    imageNames = imageNames
+                    imageNames = imageNames,
+                    datasetVersion = manifest.dataset.version,
+                    updatedAt = manifest.dataset.updated_at
                 )
             )
         } catch (e: Exception) {
@@ -282,6 +299,9 @@ object DatasetTransferService {
                 name = datasetName,
                 description = manifest.dataset.description,
                 metadata = manifest.dataset.metadata,
+                samplingEvents = manifest.dataset.samplingEvents,
+                version = manifest.dataset.version,
+                updated_at = manifest.dataset.updated_at,
                 created_at = System.currentTimeMillis()
             )
 
@@ -325,6 +345,11 @@ object DatasetTransferService {
                             reviewStatus = item.reviewStatus,
                             reviewNote = item.reviewNote,
                             reviewedAt = item.reviewedAt,
+                            candidateSpeciesIds = item.candidateSpeciesIds,
+                            annotations = item.annotations,
+                            scaleCalibration = item.scaleCalibration,
+                            quality = item.quality,
+                            identificationHistory = item.identificationHistory,
                             created_at = item.createdAt
                         )
                     )
@@ -383,6 +408,11 @@ object DatasetTransferService {
                 reviewStatus = image.reviewStatus,
                 reviewNote = image.reviewNote,
                 reviewedAt = image.reviewedAt,
+                candidateSpeciesIds = image.candidateSpeciesIds,
+                annotations = image.annotations,
+                scaleCalibration = image.scaleCalibration,
+                quality = image.quality,
+                identificationHistory = image.identificationHistory,
                 createdAt = image.created_at
             )
         }
@@ -421,6 +451,9 @@ object DatasetTransferService {
                 name = dataset.name,
                 description = dataset.description,
                 metadata = dataset.metadata,
+                samplingEvents = dataset.samplingEvents,
+                version = dataset.version,
+                updated_at = dataset.updated_at,
                 created_at = dataset.created_at
             ),
             images = writtenImages

@@ -16,8 +16,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.dlovel.plankton.data.Dataset
+import com.dlovel.plankton.data.ChainOfCustodyEntry
+import com.dlovel.plankton.data.GeoPoint
 import com.dlovel.plankton.data.LocalAppStore
 import com.dlovel.plankton.data.SampleMetadata
+import com.dlovel.plankton.data.SamplingEvent
 import com.dlovel.plankton.data.UsageEvent
 import com.dlovel.plankton.service.DatasetTransferService
 import com.dlovel.plankton.service.StorageManager
@@ -29,6 +32,7 @@ import com.dlovel.plankton.ui.components.SoftCard
 import com.dlovel.plankton.util.ShareUtils
 import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +42,7 @@ fun DatasetsScreen() {
     val state by LocalAppStore.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var showAddDialog by remember { mutableStateOf(false) }
+    var editingDatasetId by remember { mutableStateOf<String?>(null) }
     var newName by remember { mutableStateOf("") }
     var newDesc by remember { mutableStateOf("") }
     var samplingSite by remember { mutableStateOf("") }
@@ -49,6 +54,18 @@ fun DatasetsScreen() {
     var waterTemperature by remember { mutableStateOf("") }
     var ph by remember { mutableStateOf("") }
     var salinity by remember { mutableStateOf("") }
+    var eventStartedAt by remember { mutableStateOf("") }
+    var eventEndedAt by remember { mutableStateOf("") }
+    var weather by remember { mutableStateOf("") }
+    var tide by remember { mutableStateOf("") }
+    var eventTemperature by remember { mutableStateOf("") }
+    var eventPh by remember { mutableStateOf("") }
+    var eventSalinity by remember { mutableStateOf("") }
+    var qrCode by remember { mutableStateOf("") }
+    var trackPoints by remember { mutableStateOf("") }
+    var chainOperator by remember { mutableStateOf("") }
+    var chainAction by remember { mutableStateOf("") }
+    var chainNote by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<Dataset?>(null) }
     var backupTarget by remember { mutableStateOf<Dataset?>(null) }
     var exporting by remember { mutableStateOf(false) }
@@ -62,6 +79,63 @@ fun DatasetsScreen() {
     var importProgress by remember { mutableStateOf<DatasetTransferService.TransferProgress?>(null) }
     val datasets = state.datasets.sortedByDescending { it.created_at }
     val speciesMap = remember(state.species) { state.species.associateBy { it.id } }
+
+    fun resetDatasetForm() {
+        editingDatasetId = null
+        newName = ""
+        newDesc = ""
+        samplingSite = ""
+        sampleCode = ""
+        sampledAt = ""
+        latitude = ""
+        longitude = ""
+        waterDepth = ""
+        waterTemperature = ""
+        ph = ""
+        salinity = ""
+        eventStartedAt = ""
+        eventEndedAt = ""
+        weather = ""
+        tide = ""
+        eventTemperature = ""
+        eventPh = ""
+        eventSalinity = ""
+        qrCode = ""
+        trackPoints = ""
+        chainOperator = ""
+        chainAction = ""
+        chainNote = ""
+    }
+
+    fun beginEdit(dataset: Dataset) {
+        editingDatasetId = dataset.id
+        newName = dataset.name
+        newDesc = dataset.description.orEmpty()
+        samplingSite = dataset.metadata.samplingSite.orEmpty()
+        sampleCode = dataset.metadata.sampleCode.orEmpty()
+        sampledAt = dataset.metadata.sampledAt.orEmpty()
+        latitude = dataset.metadata.latitude?.toString().orEmpty()
+        longitude = dataset.metadata.longitude?.toString().orEmpty()
+        waterDepth = dataset.metadata.waterDepthMeters?.toString().orEmpty()
+        waterTemperature = dataset.metadata.waterTemperatureCelsius?.toString().orEmpty()
+        ph = dataset.metadata.ph?.toString().orEmpty()
+        salinity = dataset.metadata.salinityPsu?.toString().orEmpty()
+        val event = dataset.samplingEvents.firstOrNull()
+        eventStartedAt = event?.startedAt.orEmpty()
+        eventEndedAt = event?.endedAt.orEmpty()
+        weather = event?.weather.orEmpty()
+        tide = event?.tide.orEmpty()
+        eventTemperature = event?.waterTemperatureCelsius?.toString().orEmpty()
+        eventPh = event?.ph?.toString().orEmpty()
+        eventSalinity = event?.salinityPsu?.toString().orEmpty()
+        qrCode = event?.qrCode.orEmpty()
+        trackPoints = event?.track?.joinToString(";") { "${it.latitude},${it.longitude}" }.orEmpty()
+        val custody = event?.chainOfCustody?.lastOrNull()
+        chainOperator = custody?.operator.orEmpty()
+        chainAction = custody?.action.orEmpty()
+        chainNote = custody?.note.orEmpty()
+        showAddDialog = true
+    }
 
     fun resolveDatasetName(baseName: String): String {
         val trimmed = baseName.trim().ifBlank { "导入数据集" }
@@ -124,7 +198,10 @@ fun DatasetsScreen() {
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { showAddDialog = true },
+                onClick = {
+                    resetDatasetForm()
+                    showAddDialog = true
+                },
                 containerColor = MaterialTheme.colorScheme.primary
             ) {
                 Icon(Icons.Default.Add, contentDescription = "新建数据集", tint = MaterialTheme.colorScheme.onPrimary)
@@ -135,6 +212,7 @@ fun DatasetsScreen() {
     ) { padding ->
         ScreenEnter(
             modifier = Modifier
+                .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp)
         ) {
@@ -142,7 +220,10 @@ fun DatasetsScreen() {
                 title = "数据集管理",
                 subtitle = "集中管理采样数据与图像记录",
                 actionLabel = "新建数据集",
-                onActionClick = { showAddDialog = true }
+                onActionClick = {
+                    resetDatasetForm()
+                    showAddDialog = true
+                }
             )
             Spacer(modifier = Modifier.height(20.dp))
             SectionHeader(title = "数据集列表")
@@ -173,18 +254,34 @@ fun DatasetsScreen() {
                     title = "还没有数据集",
                     subtitle = "创建一个数据集开始整理你的采样记录。",
                     actionLabel = "创建数据集",
-                    onActionClick = { showAddDialog = true }
+                    onActionClick = {
+                        resetDatasetForm()
+                        showAddDialog = true
+                    }
                 )
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     items(datasets) { ds ->
                         SoftCard(modifier = Modifier.fillMaxWidth()) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                verticalAlignment = androidx.compose.ui.Alignment.Top
                             ) {
-                                Text(ds.name, style = MaterialTheme.typography.titleMedium)
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    ds.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                                    TextButton(onClick = { beginEdit(ds) }) {
+                                        Text("编辑")
+                                    }
                                     TextButton(
                                         onClick = {
                                             backupTarget = ds
@@ -249,6 +346,13 @@ fun DatasetsScreen() {
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
+                            if (ds.samplingEvents.isNotEmpty()) {
+                                Text(
+                                    "采样事件 ${ds.samplingEvents.size} 个 · 轨迹点 ${ds.samplingEvents.sumOf { it.track.size }} 个",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -259,7 +363,7 @@ fun DatasetsScreen() {
     if (showAddDialog) {
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("新建数据集") },
+            title = { Text(if (editingDatasetId == null) "新建数据集" else "编辑数据集") },
             text = {
                 Column(
                     modifier = Modifier
@@ -277,6 +381,26 @@ fun DatasetsScreen() {
                     OutlinedTextField(value = waterTemperature, onValueChange = { waterTemperature = it }, label = { Text("水温（℃）") })
                     OutlinedTextField(value = ph, onValueChange = { ph = it }, label = { Text("pH") })
                     OutlinedTextField(value = salinity, onValueChange = { salinity = it }, label = { Text("盐度（PSU）") })
+                    Divider()
+                    Text("采样事件（可选）", style = MaterialTheme.typography.titleSmall)
+                    OutlinedTextField(value = eventStartedAt, onValueChange = { eventStartedAt = it }, label = { Text("事件开始时间") })
+                    OutlinedTextField(value = eventEndedAt, onValueChange = { eventEndedAt = it }, label = { Text("事件结束时间") })
+                    OutlinedTextField(value = weather, onValueChange = { weather = it }, label = { Text("天气") })
+                    OutlinedTextField(value = tide, onValueChange = { tide = it }, label = { Text("潮汐") })
+                    OutlinedTextField(value = eventTemperature, onValueChange = { eventTemperature = it }, label = { Text("事件水温（℃）") })
+                    OutlinedTextField(value = eventPh, onValueChange = { eventPh = it }, label = { Text("事件 pH") })
+                    OutlinedTextField(value = eventSalinity, onValueChange = { eventSalinity = it }, label = { Text("事件盐度（PSU）") })
+                    OutlinedTextField(value = qrCode, onValueChange = { qrCode = it }, label = { Text("样品二维码内容") })
+                    OutlinedTextField(
+                        value = trackPoints,
+                        onValueChange = { trackPoints = it },
+                        label = { Text("地图轨迹点（纬度,经度；分号分隔）") },
+                        minLines = 2
+                    )
+                    Text("样品链追踪", style = MaterialTheme.typography.titleSmall)
+                    OutlinedTextField(value = chainOperator, onValueChange = { chainOperator = it }, label = { Text("操作人") })
+                    OutlinedTextField(value = chainAction, onValueChange = { chainAction = it }, label = { Text("链路动作") })
+                    OutlinedTextField(value = chainNote, onValueChange = { chainNote = it }, label = { Text("链路备注") })
                 }
             },
             confirmButton = {
@@ -287,39 +411,79 @@ fun DatasetsScreen() {
                             snackbarHostState.showSnackbar("请输入数据集名称")
                             return@launch
                         }
-                        LocalAppStore.addDataset(
-                            context = context,
-                            name = name,
-                            description = newDesc.trim(),
-                            metadata = SampleMetadata(
-                                samplingSite = samplingSite.trim().takeIf { it.isNotBlank() },
-                                latitude = latitude.toDoubleOrNull(),
-                                longitude = longitude.toDoubleOrNull(),
-                                sampledAt = sampledAt.trim().takeIf { it.isNotBlank() },
-                                waterDepthMeters = waterDepth.toDoubleOrNull(),
-                                waterTemperatureCelsius = waterTemperature.toDoubleOrNull(),
-                                ph = ph.toDoubleOrNull(),
-                                salinityPsu = salinity.toDoubleOrNull(),
-                                sampleCode = sampleCode.trim().takeIf { it.isNotBlank() }
-                            )
+                        val metadata = SampleMetadata(
+                            samplingSite = samplingSite.trim().takeIf { it.isNotBlank() },
+                            latitude = latitude.toDoubleOrNull(),
+                            longitude = longitude.toDoubleOrNull(),
+                            sampledAt = sampledAt.trim().takeIf { it.isNotBlank() },
+                            waterDepthMeters = waterDepth.toDoubleOrNull(),
+                            waterTemperatureCelsius = waterTemperature.toDoubleOrNull(),
+                            ph = ph.toDoubleOrNull(),
+                            salinityPsu = salinity.toDoubleOrNull(),
+                            sampleCode = sampleCode.trim().takeIf { it.isNotBlank() }
                         )
+                        val track = trackPoints.split(';', '；')
+                            .mapNotNull { point ->
+                                val parts = point.trim().split(',', '，')
+                                if (parts.size != 2) null else {
+                                    val lat = parts[0].trim().toDoubleOrNull()
+                                    val lon = parts[1].trim().toDoubleOrNull()
+                                    if (lat == null || lon == null) null else GeoPoint(lat, lon)
+                                }
+                            }
+                        val chain = if (chainOperator.isNotBlank() || chainAction.isNotBlank() || chainNote.isNotBlank()) {
+                            listOf(ChainOfCustodyEntry(
+                                operator = chainOperator.trim().ifBlank { "未填写" },
+                                action = chainAction.trim().ifBlank { "记录" },
+                                note = chainNote.trim().takeIf { it.isNotBlank() }
+                            ))
+                        } else emptyList()
+                        val hasSamplingEvent = listOf(
+                            eventStartedAt, eventEndedAt, weather, tide, eventTemperature,
+                            eventPh, eventSalinity, qrCode, trackPoints, chainOperator, chainAction, chainNote
+                        ).any { it.isNotBlank() }
+                        val samplingEvent = if (hasSamplingEvent) SamplingEvent(
+                            site = samplingSite.trim().takeIf { it.isNotBlank() },
+                            startedAt = eventStartedAt.trim().takeIf { it.isNotBlank() },
+                            endedAt = eventEndedAt.trim().takeIf { it.isNotBlank() },
+                            track = track,
+                            weather = weather.trim().takeIf { it.isNotBlank() },
+                            tide = tide.trim().takeIf { it.isNotBlank() },
+                            waterTemperatureCelsius = eventTemperature.toDoubleOrNull(),
+                            ph = eventPh.toDoubleOrNull(),
+                            salinityPsu = eventSalinity.toDoubleOrNull(),
+                            qrCode = qrCode.trim().takeIf { it.isNotBlank() },
+                            chainOfCustody = chain
+                        ) else null
+                        val editingId = editingDatasetId
+                        if (editingId == null) {
+                            LocalAppStore.addDataset(
+                                context = context,
+                                name = name,
+                                description = newDesc.trim(),
+                                metadata = metadata,
+                                samplingEvents = samplingEvent?.let { listOf(it) } ?: emptyList()
+                            )
+                        } else {
+                            LocalAppStore.updateDataset(context, editingId) { dataset ->
+                                dataset.copy(
+                                    name = name,
+                                    description = newDesc.trim(),
+                                    metadata = metadata,
+                                    samplingEvents = samplingEvent?.let { event ->
+                                        if (dataset.samplingEvents.isEmpty()) listOf(event)
+                                        else listOf(event) + dataset.samplingEvents.drop(1)
+                                    } ?: dataset.samplingEvents
+                                )
+                            }
+                        }
                         showAddDialog = false
-                        newName = ""
-                        newDesc = ""
-                        samplingSite = ""
-                        sampleCode = ""
-                        sampledAt = ""
-                        latitude = ""
-                        longitude = ""
-                        waterDepth = ""
-                        waterTemperature = ""
-                        ph = ""
-                        salinity = ""
+                        resetDatasetForm()
                     }
-                }) { Text("创建") }
+                }) { Text(if (editingDatasetId == null) "创建" else "保存") }
             },
             dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) { Text("取消") }
+                TextButton(onClick = { showAddDialog = false; resetDatasetForm() }) { Text("取消") }
             }
         )
     }
@@ -341,12 +505,21 @@ fun DatasetsScreen() {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text("数据集：${preview.datasetName}")
+                    Text("数据版本：v${preview.datasetVersion}")
                     Text("图片：${preview.imageCount} 张")
                     Text("解压后大小：${formatByteSize(preview.totalBytes)}")
                     preview.description?.takeIf { it.isNotBlank() }?.let { Text("说明：$it") }
                     if (hasConflict) {
                         Divider()
+                        val existing = datasets.firstOrNull { it.name == preview.datasetName }
                         Text("发现同名数据集，请选择处理方式。")
+                        if (existing != null) {
+                            Text(
+                                "差异预览：本地版本 v${existing.version}，备份版本 v${preview.datasetVersion}；默认重命名，不覆盖本地数据。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             RadioButton(
                                 selected = importConflictStrategy == DatasetTransferService.ImportConflictStrategy.RENAME,

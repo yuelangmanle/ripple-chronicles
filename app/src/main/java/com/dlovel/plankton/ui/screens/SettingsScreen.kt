@@ -23,6 +23,7 @@ import coil.annotation.ExperimentalCoilApi
 import coil.imageLoader
 import com.dlovel.plankton.data.AppSettings
 import com.dlovel.plankton.data.LocalAppStore
+import com.dlovel.plankton.data.ReportTemplate
 import com.dlovel.plankton.data.StorageMode
 import com.dlovel.plankton.service.CacheService
 import com.dlovel.plankton.service.DocumentCrypto
@@ -34,6 +35,7 @@ import com.dlovel.plankton.ui.components.SectionHeader
 import com.dlovel.plankton.ui.components.ScreenEnter
 import com.dlovel.plankton.ui.components.SoftCard
 import com.dlovel.plankton.util.ReleaseLinks
+import com.dlovel.plankton.util.ReportStatistics
 import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.Lifecycle
@@ -60,6 +62,12 @@ fun SettingsScreen() {
     var checkingUpdate by remember { mutableStateOf(false) }
     var latestRelease by remember { mutableStateOf<ReleaseInfo?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    val currentReportTemplate = state.reportTemplates.firstOrNull { it.id == settings.reportTemplateId }
+        ?: state.reportTemplates.firstOrNull()
+        ?: ReportTemplate(id = "default", name = "标准鉴定报告")
+    var reportTemplateName by remember(currentReportTemplate.id, currentReportTemplate.name) {
+        mutableStateOf(currentReportTemplate.name)
+    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
@@ -315,6 +323,67 @@ fun SettingsScreen() {
         }
 
         Spacer(modifier = Modifier.height(20.dp))
+        SectionHeader(title = "报告中心")
+        Spacer(modifier = Modifier.height(12.dp))
+        SoftCard(modifier = Modifier.fillMaxWidth()) {
+            val statistics = remember(state.images, state.species) {
+                ReportStatistics.from(state.images, state.species)
+            }
+            Text("当前数据摘要", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "图片 ${statistics.totalImages} 张 · 已确认 ${statistics.confirmedImages} · 待复核 ${statistics.pendingImages} · 驳回 ${statistics.rejectedImages}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "平均置信度：${statistics.averageConfidence?.let { "%.1f%%".format(java.util.Locale.CHINA, it) } ?: "暂无"}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(
+                value = reportTemplateName,
+                onValueChange = { reportTemplateName = it },
+                label = { Text("报告模板名称") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            listOf(
+                "includeImages" to "包含图片",
+                "includeMetadata" to "包含采样元数据",
+                "includeReviewHistory" to "包含鉴定历史",
+                "includeStatistics" to "包含统计摘要"
+            ).forEach { (key, label) ->
+                val checked = when (key) {
+                    "includeImages" -> currentReportTemplate.includeImages
+                    "includeMetadata" -> currentReportTemplate.includeMetadata
+                    "includeReviewHistory" -> currentReportTemplate.includeReviewHistory
+                    else -> currentReportTemplate.includeStatistics
+                }
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(label, style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = checked,
+                        onCheckedChange = { value ->
+                            val next = when (key) {
+                                "includeImages" -> currentReportTemplate.copy(includeImages = value)
+                                "includeMetadata" -> currentReportTemplate.copy(includeMetadata = value)
+                                "includeReviewHistory" -> currentReportTemplate.copy(includeReviewHistory = value)
+                                else -> currentReportTemplate.copy(includeStatistics = value)
+                            }.copy(name = reportTemplateName.trim().ifBlank { currentReportTemplate.name })
+                            updateSettings(context, scope, settings.copy(reportTemplateId = next.id))
+                            scope.launch { LocalAppStore.updateReportTemplate(context, next) }
+                        }
+                    )
+                }
+            }
+            Button(onClick = {
+                val next = currentReportTemplate.copy(name = reportTemplateName.trim().ifBlank { "标准鉴定报告" })
+                updateSettings(context, scope, settings.copy(reportTemplateId = next.id))
+                scope.launch { LocalAppStore.updateReportTemplate(context, next) }
+            }) { Text("保存报告模板") }
+            Text("支持 CSV、Excel、Word、PDF 导出；图库导出入口会按模板保留元数据和鉴定状态。", style = MaterialTheme.typography.labelSmall)
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
         SectionHeader(title = "相机画质")
         Spacer(modifier = Modifier.height(12.dp))
         SoftCard(modifier = Modifier.fillMaxWidth()) {
@@ -402,6 +471,37 @@ fun SettingsScreen() {
                 TextButton(onClick = { scope.launch { LocalAppStore.clearUsage(context) } }) {
                     Text("清除本地统计")
                 }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("数据安全", style = MaterialTheme.typography.titleSmall)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("记录操作历史", style = MaterialTheme.typography.bodySmall)
+                Spacer(modifier = Modifier.weight(1f))
+                Text("最近 ${state.operationHistory.takeLast(5).size} 条", style = MaterialTheme.typography.labelSmall)
+            }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("启用定时备份提醒", style = MaterialTheme.typography.bodySmall)
+                Spacer(modifier = Modifier.weight(1f))
+                Switch(
+                    checked = settings.autoBackupEnabled,
+                    onCheckedChange = { enabled ->
+                        updateSettings(context, scope, settings.copy(autoBackupEnabled = enabled))
+                    }
+                )
+            }
+            if (settings.autoBackupEnabled) {
+                Text("备份间隔：${settings.autoBackupIntervalHours} 小时", style = MaterialTheme.typography.labelSmall)
+                Slider(
+                    value = settings.autoBackupIntervalHours.toFloat(),
+                    onValueChange = { value ->
+                        updateSettings(context, scope, settings.copy(autoBackupIntervalHours = value.toInt().coerceIn(6, 168)))
+                    },
+                    valueRange = 6f..168f,
+                    steps = 26
+                )
+            }
+            state.operationHistory.takeLast(5).asReversed().forEach { record ->
+                Text("${record.operation} · ${java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date(record.happenedAt))}", style = MaterialTheme.typography.labelSmall)
             }
         }
 

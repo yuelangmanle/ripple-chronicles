@@ -15,6 +15,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
 import java.io.File
 import java.util.UUID
+import com.dlovel.plankton.service.BackupSnapshotService
 
 object LocalAppStore {
     private const val DATA_FILE = "app_state.json"
@@ -62,12 +63,20 @@ object LocalAppStore {
         }
     }
 
-    suspend fun update(context: Context, block: (AppState) -> AppState) {
+    suspend fun update(
+        context: Context,
+        operation: String = "UPDATE",
+        block: (AppState) -> AppState
+    ) {
         mutex.withLock {
             val current = _state.value
             val next = block(current)
-            _state.value = next
-            save(context, next)
+            val recorded = if (operation.isBlank()) next else next.copy(
+                operationHistory = (next.operationHistory + OperationRecord(operation = operation))
+                    .takeLast(500)
+            )
+            _state.value = recorded
+            save(context, recorded)
         }
     }
 
@@ -75,25 +84,48 @@ object LocalAppStore {
         context: Context,
         name: String,
         description: String,
-        metadata: SampleMetadata = SampleMetadata()
+        metadata: SampleMetadata = SampleMetadata(),
+        samplingEvents: List<SamplingEvent> = emptyList()
     ): Dataset {
         val dataset = Dataset(
             id = UUID.randomUUID().toString(),
             name = name,
             description = description,
             metadata = metadata,
+            samplingEvents = samplingEvents,
             created_at = System.currentTimeMillis()
         )
-        update(context) { it.copy(datasets = it.datasets + dataset) }
+        update(context, operation = "ADD_DATASET") { it.copy(datasets = it.datasets + dataset) }
         return dataset
     }
 
+    suspend fun updateDataset(
+        context: Context,
+        datasetId: String,
+        updater: (Dataset) -> Dataset
+    ) {
+        update(context, operation = "UPDATE_DATASET") { current ->
+            current.copy(
+                datasets = current.datasets.map { dataset ->
+                    if (dataset.id == datasetId) {
+                        updater(dataset).copy(
+                            version = dataset.version + 1,
+                            updated_at = System.currentTimeMillis()
+                        )
+                    } else {
+                        dataset
+                    }
+                }
+            )
+        }
+    }
+
     suspend fun addImages(context: Context, newImages: List<PlanktonImage>) {
-        update(context) { it.copy(images = it.images + newImages) }
+        update(context, operation = "ADD_IMAGES") { it.copy(images = it.images + newImages) }
     }
 
     suspend fun updateImage(context: Context, imageId: String, updater: (PlanktonImage) -> PlanktonImage) {
-        update(context) {
+        update(context, operation = "UPDATE_IMAGE") {
             val updated = it.images.map { img ->
                 if (img.id == imageId) updater(img) else img
             }
@@ -102,15 +134,15 @@ object LocalAppStore {
     }
 
     suspend fun deleteImage(context: Context, imageId: String) {
-        update(context) { deleteImageFromState(it, imageId) }
+        update(context, operation = "DELETE_IMAGE") { deleteImageFromState(it, imageId) }
     }
 
     suspend fun deleteDataset(context: Context, datasetId: String) {
-        update(context) { deleteDatasetFromState(it, datasetId) }
+        update(context, operation = "DELETE_DATASET") { deleteDatasetFromState(it, datasetId) }
     }
 
     suspend fun addSpecies(context: Context, newSpecies: List<Species>) {
-        update(context) {
+        update(context, operation = "ADD_SPECIES") {
             val existing = it.species.associateBy { species -> speciesKey(species) }
             val merged = it.species + newSpecies.filterNot { species ->
                 existing.containsKey(speciesKey(species))
@@ -120,7 +152,7 @@ object LocalAppStore {
     }
 
     suspend fun updateSpecies(context: Context, speciesId: String, updater: (Species) -> Species) {
-        update(context) {
+        update(context, operation = "UPDATE_SPECIES") {
             val updated = it.species.map { sp ->
                 if (sp.id == speciesId) updater(sp) else sp
             }
@@ -129,17 +161,25 @@ object LocalAppStore {
     }
 
     suspend fun deleteSpecies(context: Context, speciesId: String) {
-        update(context) {
+        update(context, operation = "DELETE_SPECIES") {
             it.copy(species = it.species.filterNot { sp -> sp.id == speciesId })
         }
     }
 
     suspend fun updateSettings(context: Context, settings: AppSettings) {
-        update(context) { it.copy(settings = settings) }
+        update(context, operation = "UPDATE_SETTINGS") { it.copy(settings = settings) }
+    }
+
+    suspend fun updateReportTemplate(context: Context, template: ReportTemplate) {
+        update(context, operation = "UPDATE_REPORT_TEMPLATE") { current ->
+            val replaced = current.reportTemplates.map { if (it.id == template.id) template else it }
+            val templates = if (replaced.any { it.id == template.id }) replaced else replaced + template
+            current.copy(reportTemplates = templates)
+        }
     }
 
     suspend fun recordUsage(context: Context, event: UsageEvent) {
-        update(context) { current ->
+        update(context, operation = "RECORD_USAGE") { current ->
             if (!current.settings.telemetryEnabled) return@update current
             val metrics = current.usageMetrics
             val next = when (event) {
@@ -152,17 +192,17 @@ object LocalAppStore {
     }
 
     suspend fun clearUsage(context: Context) {
-        update(context) { it.copy(usageMetrics = LocalUsageMetrics()) }
+        update(context, operation = "CLEAR_USAGE") { it.copy(usageMetrics = LocalUsageMetrics()) }
     }
 
     suspend fun enqueueSyncOperation(context: Context, operation: SyncQueueOperation) {
-        update(context) { current ->
+        update(context, operation = "QUEUE_SYNC") { current ->
             current.copy(pendingSyncOperations = (current.pendingSyncOperations + operation).takeLast(200))
         }
     }
 
     suspend fun clearCompletedSyncOperations(context: Context) {
-        update(context) { current ->
+        update(context, operation = "CLEAR_SYNC") { current ->
             current.copy(
                 pendingSyncOperations = current.pendingSyncOperations.filter {
                     it.conflictState == "PENDING" || it.conflictState == "CONFLICT"
@@ -179,6 +219,8 @@ object LocalAppStore {
             stream.write(json.encodeToString(AppState.serializer(), state).toByteArray(Charsets.UTF_8))
             stream.fd.sync()
             atomicFile.finishWrite(stream)
+            runCatching { SqliteMetadataStore.mirrorIfNeeded(context, state) }
+            runCatching { BackupSnapshotService.maybeCreate(context, state) }
         } catch (error: Exception) {
             atomicFile.failWrite(stream)
             throw error

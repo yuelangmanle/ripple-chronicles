@@ -48,14 +48,22 @@ fun TaxonomyScreen() {
     var importCategory by remember { mutableStateOf("浮游动物") }
     var addName by remember { mutableStateOf("") }
     var addLatin by remember { mutableStateOf("") }
+    var addSynonyms by remember { mutableStateOf("") }
+    var addTaxonomyVersion by remember { mutableStateOf("") }
+    var addReference by remember { mutableStateOf("") }
+    var addDistribution by remember { mutableStateOf("") }
     var editTarget by remember { mutableStateOf<Species?>(null) }
     var editName by remember { mutableStateOf("") }
     var editLatin by remember { mutableStateOf("") }
     var editCategory by remember { mutableStateOf("浮游动物") }
+    var editSynonyms by remember { mutableStateOf("") }
+    var editTaxonomyVersion by remember { mutableStateOf("") }
+    var editReference by remember { mutableStateOf("") }
+    var editDistribution by remember { mutableStateOf("") }
     val defaultCategories = listOf("浮游动物", "浮游植物", "着生藻类", "底栖动物")
     val categories = remember(speciesAll) {
         val userCategories = speciesAll
-            .filter { it.source.isNullOrBlank() }
+            .filter { it.source.isNullOrBlank() || it.isUserDefined }
             .map { it.category }
             .filter { it.isNotBlank() }
         (defaultCategories + userCategories).distinct()
@@ -169,6 +177,10 @@ fun TaxonomyScreen() {
                                         editName = species.name_cn ?: ""
                                         editLatin = species.name_latin ?: ""
                                         editCategory = species.category
+                                        editSynonyms = species.synonyms.joinToString("、")
+                                        editTaxonomyVersion = species.taxonomyVersion.orEmpty()
+                                        editReference = species.reference.orEmpty()
+                                        editDistribution = species.distribution.orEmpty()
                                     }
                                 )
                         ) {
@@ -184,6 +196,17 @@ fun TaxonomyScreen() {
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
+                            if (species.synonyms.isNotEmpty()) {
+                                Text("异名：${species.synonyms.joinToString("、")}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            val source = listOfNotNull(
+                                species.taxonomyVersion?.takeIf { it.isNotBlank() }?.let { "分类版本 $it" },
+                                species.reference?.takeIf { it.isNotBlank() }?.let { "来源 $it" },
+                                species.distribution?.takeIf { it.isNotBlank() }?.let { "分布 $it" }
+                            ).joinToString(" · ")
+                            if (source.isNotBlank()) {
+                                Text(source, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -270,6 +293,30 @@ fun TaxonomyScreen() {
                         label = { Text("拉丁名") },
                         modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = addSynonyms,
+                        onValueChange = { addSynonyms = it },
+                        label = { Text("异名（用顿号或逗号分隔）") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = addTaxonomyVersion,
+                        onValueChange = { addTaxonomyVersion = it },
+                        label = { Text("分类版本") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = addReference,
+                        onValueChange = { addReference = it },
+                        label = { Text("文献来源") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = addDistribution,
+                        onValueChange = { addDistribution = it },
+                        label = { Text("物种分布") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     categories.forEach { category ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -296,7 +343,13 @@ fun TaxonomyScreen() {
                                         id = UUID.randomUUID().toString(),
                                         name_cn = name,
                                         name_latin = addLatin.trim().ifBlank { null },
-                                        category = selectedCategory
+                                        category = selectedCategory,
+                                        source = "user",
+                                        synonyms = parseDelimited(addSynonyms),
+                                        taxonomyVersion = addTaxonomyVersion.trim().ifBlank { null },
+                                        reference = addReference.trim().ifBlank { null },
+                                        distribution = addDistribution.trim().ifBlank { null },
+                                        isUserDefined = true
                                     )
                                 )
                             )
@@ -304,6 +357,10 @@ fun TaxonomyScreen() {
                     }
                     addName = ""
                     addLatin = ""
+                    addSynonyms = ""
+                    addTaxonomyVersion = ""
+                    addReference = ""
+                    addDistribution = ""
                     showAddDialog = false
                 }) { Text("保存") }
             },
@@ -332,6 +389,30 @@ fun TaxonomyScreen() {
                         label = { Text("拉丁名") },
                         modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = editSynonyms,
+                        onValueChange = { editSynonyms = it },
+                        label = { Text("异名（用顿号或逗号分隔）") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editTaxonomyVersion,
+                        onValueChange = { editTaxonomyVersion = it },
+                        label = { Text("分类版本") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editReference,
+                        onValueChange = { editReference = it },
+                        label = { Text("文献来源") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editDistribution,
+                        onValueChange = { editDistribution = it },
+                        label = { Text("物种分布") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     categories.forEach { category ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -353,7 +434,11 @@ fun TaxonomyScreen() {
                             sp.copy(
                                 name_cn = editName.trim().ifBlank { sp.name_cn },
                                 name_latin = editLatin.trim().ifBlank { null },
-                                category = editCategory
+                                category = editCategory,
+                                synonyms = parseDelimited(editSynonyms),
+                                taxonomyVersion = editTaxonomyVersion.trim().ifBlank { null },
+                                reference = editReference.trim().ifBlank { null },
+                                distribution = editDistribution.trim().ifBlank { null }
                             )
                         }
                     }
@@ -371,6 +456,12 @@ fun TaxonomyScreen() {
         )
     }
 }
+
+private fun parseDelimited(value: String): List<String> = value
+    .split(',', '，', '、', ';', '；', '\n')
+    .map { it.trim() }
+    .filter { it.isNotBlank() }
+    .distinct()
 
 private fun readSpeciesFromExcel(
     context: Context,

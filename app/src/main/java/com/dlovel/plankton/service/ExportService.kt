@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -19,6 +20,7 @@ import kotlinx.coroutines.withContext
 import org.apache.poi.xwpf.usermodel.ParagraphAlignment
 import org.apache.poi.xwpf.usermodel.XWPFDocument
 import org.apache.poi.xwpf.usermodel.XWPFTable
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.STTblLayoutType
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -33,6 +35,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.abs
 import kotlin.math.min
+import com.dlovel.plankton.util.ReportStatistics
 
 object ExportService {
     data class ExportItem(
@@ -57,6 +60,97 @@ object ExportService {
         val successCount: Int,
         val error: String? = null
     )
+
+    suspend fun exportCsvToUri(
+        context: Context,
+        items: List<ExportItem>,
+        targetUri: Uri
+    ): ExportResult = withContext(Dispatchers.IO) {
+        val mime = "text/csv"
+        runCatching {
+            val csv = buildString {
+                appendLine("图片名,物种中文名,拉丁名,置信度,复核状态,备注,创建时间")
+                items.forEach { item ->
+                    appendLine(listOf(item.name, item.speciesName.orEmpty(), item.speciesLatin.orEmpty(), item.confidence?.toString().orEmpty(), item.reviewStatus, item.reviewNote.orEmpty(), item.createdAt?.toString().orEmpty()).joinToString(",") { csvEscape(it) })
+                }
+            }
+            context.contentResolver.openOutputStream(targetUri)?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
+                ?: error("无法写入目标位置")
+            ExportResult(targetUri, queryDisplayName(context, targetUri) ?: "鉴定报告.csv", mime)
+        }.getOrElse { ExportResult(null, "鉴定报告.csv", mime, it.message) }
+    }
+
+    suspend fun exportExcelToUri(
+        context: Context,
+        items: List<ExportItem>,
+        targetUri: Uri,
+        statistics: ReportStatistics? = null
+    ): ExportResult = withContext(Dispatchers.IO) {
+        val mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        runCatching {
+            XSSFWorkbook().use { workbook ->
+                val sheet = workbook.createSheet("鉴定记录")
+                val headers = listOf("图片名", "物种中文名", "拉丁名", "置信度", "复核状态", "备注")
+                headers.forEachIndexed { index, header -> sheet.createRow(0).createCell(index).setCellValue(header) }
+                items.forEachIndexed { rowIndex, item ->
+                    val row = sheet.createRow(rowIndex + 1)
+                    listOf(item.name, item.speciesName.orEmpty(), item.speciesLatin.orEmpty(), item.confidence?.toString().orEmpty(), item.reviewStatus, item.reviewNote.orEmpty())
+                        .forEachIndexed { index, value -> row.createCell(index).setCellValue(value) }
+                }
+                statistics?.let { summary ->
+                    val summarySheet = workbook.createSheet("统计摘要")
+                    listOf(
+                        "图片总数" to summary.totalImages.toString(),
+                        "已确认" to summary.confirmedImages.toString(),
+                        "待复核" to summary.pendingImages.toString(),
+                        "已驳回" to summary.rejectedImages.toString(),
+                        "平均置信度" to summary.averageConfidence?.let { "%.1f".format(Locale.CHINA, it) }.orEmpty()
+                    ).forEachIndexed { index, (label, value) ->
+                        summarySheet.createRow(index).apply { createCell(0).setCellValue(label); createCell(1).setCellValue(value) }
+                    }
+                }
+                context.contentResolver.openOutputStream(targetUri)?.use { workbook.write(it) } ?: error("无法写入目标位置")
+            }
+            ExportResult(targetUri, queryDisplayName(context, targetUri) ?: "鉴定报告.xlsx", mime)
+        }.getOrElse { ExportResult(null, "鉴定报告.xlsx", mime, it.message) }
+    }
+
+    suspend fun exportPdfToUri(
+        context: Context,
+        items: List<ExportItem>,
+        targetUri: Uri,
+        statistics: ReportStatistics? = null
+    ): ExportResult = withContext(Dispatchers.IO) {
+        val mime = "application/pdf"
+        runCatching {
+            val document = PdfDocument()
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textSize = 12f }
+            var pageNumber = 1
+            var page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, pageNumber).create())
+            var canvas = page.canvas
+            var y = 40f
+            fun line(text: String) {
+                if (y > 800f) {
+                    document.finishPage(page)
+                    pageNumber += 1
+                    page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, pageNumber).create())
+                    canvas = page.canvas
+                    y = 40f
+                }
+                canvas.drawText(text.take(90), 32f, y, paint)
+                y += 22f
+            }
+            line("溯澜录鉴定报告")
+            statistics?.let { line("统计：共 ${it.totalImages} 张，已确认 ${it.confirmedImages} 张，待复核 ${it.pendingImages} 张") }
+            items.forEach { item -> line("${item.name} | ${item.speciesName.orEmpty()} | ${item.reviewStatus} | ${item.confidence?.let { "$it%" }.orEmpty()}") }
+            document.finishPage(page)
+            context.contentResolver.openOutputStream(targetUri)?.use { document.writeTo(it) } ?: error("无法写入目标位置")
+            document.close()
+            ExportResult(targetUri, queryDisplayName(context, targetUri) ?: "鉴定报告.pdf", mime)
+        }.getOrElse { ExportResult(null, "鉴定报告.pdf", mime, it.message) }
+    }
+
+    private fun csvEscape(value: String): String = "\"${value.replace("\"", "\"\"")}\""
 
     suspend fun exportReport(
         context: Context,

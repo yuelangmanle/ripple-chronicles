@@ -56,10 +56,16 @@ fun MainScreen() {
                     NavigationBarItem(
                         selected = currentRoute == route,
                         onClick = {
-                            navController.navigate(route) {
-                                launchSingleTop = true
-                                restoreState = true
-                                popUpTo("home") { saveState = true }
+                            if (currentRoute != route) {
+                                if (route == "home") {
+                                    navController.popBackStack("home", inclusive = false)
+                                } else {
+                                    navController.navigate(route) {
+                                        launchSingleTop = true
+                                        restoreState = true
+                                        popUpTo("home") { saveState = true }
+                                    }
+                                }
                             }
                         },
                     icon = { Icon(icon, contentDescription = label) },
@@ -85,6 +91,7 @@ fun MainScreen() {
             composable("camera") { CameraScreen(navController) }
             composable("datasets") { DatasetsScreen() }
             composable("gallery") { GalleryScreen(navController) }
+            composable("review") { ReviewScreen() }
             composable("taxonomy") { TaxonomyScreen() }
             composable("settings") { SettingsScreen() }
         }

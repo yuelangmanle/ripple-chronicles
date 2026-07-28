@@ -1,34 +1,25 @@
 package com.dlovel.plankton.util
 
 import com.dlovel.plankton.data.Species
-import java.util.Locale
 
-fun matchSpeciesIdByName(rawName: String?, speciesList: List<Species>): String? {
-    val name = rawName?.trim().orEmpty()
-    if (name.isBlank()) return null
-    val normalizedName = normalizeName(name)
-    if (normalizedName.isBlank()) return null
-    var bestMatch: Pair<String, Int>? = null
-    for (species in speciesList) {
-        val candidates = listOfNotNull(species.name_cn, species.name_latin)
-        for (candidate in candidates) {
-            val normalizedCandidate = normalizeName(candidate)
-            if (normalizedCandidate.isBlank()) continue
-            if (normalizedName.contains(normalizedCandidate)) {
-                val currentLength = bestMatch?.second ?: -1
-                if (normalizedCandidate.length > currentLength) {
-                    bestMatch = species.id to normalizedCandidate.length
-                }
+fun matchCandidateSpeciesIds(query: String, species: List<Species>, limit: Int = 5): List<String> {
+    val normalized = query.trim()
+    if (normalized.isBlank()) return emptyList()
+    return species.mapNotNull { item ->
+        val fields = listOfNotNull(item.name_cn, item.name_latin) + item.synonyms
+        val score = fields.map { field ->
+            when {
+                field.equals(normalized, ignoreCase = true) -> 0
+                field.startsWith(normalized, ignoreCase = true) -> 1
+                field.contains(normalized, ignoreCase = true) -> 2
+                else -> 99
             }
-        }
-    }
-    return bestMatch?.first
+        }.minOrNull() ?: 99
+        if (score < 99) item.id to score else null
+    }.sortedWith(compareBy<Pair<String, Int>> { it.second }.thenBy { it.first })
+        .take(limit.coerceAtLeast(0))
+        .map { it.first }
 }
 
-private fun normalizeName(value: String): String {
-    return value
-        .trim()
-        .lowercase(Locale.CHINA)
-        .replace(Regex("[\\s_\\-]+"), "")
-        .replace(Regex("[()（）\\[\\]【】]"), "")
-}
+fun matchSpeciesIdByName(query: String?, species: List<Species>): String? =
+    matchCandidateSpeciesIds(query.orEmpty(), species, limit = 1).firstOrNull()

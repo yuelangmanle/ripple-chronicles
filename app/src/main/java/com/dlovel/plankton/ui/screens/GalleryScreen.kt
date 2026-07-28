@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -51,6 +53,7 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.size.Size
 import com.dlovel.plankton.data.LocalAppStore
+import com.dlovel.plankton.data.AnnotationType
 import com.dlovel.plankton.data.Dataset
 import com.dlovel.plankton.data.PlanktonImage
 import com.dlovel.plankton.data.StorageMode
@@ -59,12 +62,16 @@ import com.dlovel.plankton.service.ExportService
 import com.dlovel.plankton.service.StorageManager
 import com.dlovel.plankton.ui.components.EmptyStateCard
 import com.dlovel.plankton.ui.components.GradientHeaderCard
+import com.dlovel.plankton.ui.components.ImageAnnotationEditor
 import com.dlovel.plankton.ui.components.SectionHeader
 import com.dlovel.plankton.ui.components.SoftCard
 import com.dlovel.plankton.ui.components.SpeciesAutocomplete
 import com.dlovel.plankton.util.ShareUtils
 import com.dlovel.plankton.util.VibrationUtil
 import com.dlovel.plankton.util.matchSpeciesIdByName
+import com.dlovel.plankton.util.matchesGalleryQuery
+import com.dlovel.plankton.util.matchCandidateSpeciesIds
+import com.dlovel.plankton.util.visibleSelectionIds
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -118,7 +125,8 @@ fun GalleryScreen(navController: NavController) {
     var confidenceText by remember { mutableStateOf("") }
     var reviewStatus by remember { mutableStateOf("UNREVIEWED") }
     var reviewNote by remember { mutableStateOf("") }
-    var viewerIndex by remember { mutableStateOf<Int?>(null) }
+    var annotationTarget by remember { mutableStateOf<PlanktonImage?>(null) }
+    var viewerImageId by remember { mutableStateOf<String?>(null) }
     var pendingExportItems by remember { mutableStateOf<List<ExportService.ExportItem>>(emptyList()) }
     var deleteImageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var exportPreviewMode by remember { mutableStateOf<ExportMode?>(null) }
@@ -158,22 +166,24 @@ fun GalleryScreen(navController: NavController) {
     }
 
     BackHandler(
-        enabled = viewerIndex != null ||
+        enabled = viewerImageId != null ||
             renameTarget != null ||
             datasetFilterDialog ||
             categoryFilterDialog ||
             selectionMode ||
             showBatchLinkDialog ||
             showBatchRenameDialog ||
+            annotationTarget != null ||
             deleteImageIds.isNotEmpty()
     ) {
         when {
-            viewerIndex != null -> viewerIndex = null
+            viewerImageId != null -> viewerImageId = null
             renameTarget != null -> renameTarget = null
             datasetFilterDialog -> datasetFilterDialog = false
             categoryFilterDialog -> categoryFilterDialog = false
             showBatchLinkDialog -> showBatchLinkDialog = false
             showBatchRenameDialog -> showBatchRenameDialog = false
+            annotationTarget != null -> annotationTarget = null
             deleteImageIds.isNotEmpty() -> deleteImageIds = emptySet()
             selectionMode -> {
                 selectionMode = false
@@ -210,7 +220,8 @@ fun GalleryScreen(navController: NavController) {
                         PlanktonImage(
                             dataset_id = targetDatasetId,
                             image_url = savedUri,
-                            custom_name = baseName
+                            custom_name = baseName,
+                            candidateSpeciesIds = matchCandidateSpeciesIds(baseName, state.species)
                         )
                     )
                 }
@@ -285,6 +296,42 @@ fun GalleryScreen(navController: NavController) {
         }
     }
 
+    val csvExporter = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            exporting = true
+            val result = ExportService.exportCsvToUri(context, pendingExportItems, uri)
+            exporting = false
+            snackbarHostState.showSnackbar(result.error ?: "已导出 ${result.displayName}")
+        }
+    }
+
+    val excelExporter = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            exporting = true
+            val result = ExportService.exportExcelToUri(context, pendingExportItems, uri)
+            exporting = false
+            snackbarHostState.showSnackbar(result.error ?: "已导出 ${result.displayName}")
+        }
+    }
+
+    val pdfExporter = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            exporting = true
+            val result = ExportService.exportPdfToUri(context, pendingExportItems, uri)
+            exporting = false
+            snackbarHostState.showSnackbar(result.error ?: "已导出 ${result.displayName}")
+        }
+    }
+
     val folderExporter = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -320,15 +367,12 @@ fun GalleryScreen(navController: NavController) {
         val category = speciesMap[img.species_id]?.category ?: "未分类"
         val categoryMatch = selectedCategories.isEmpty() || selectedCategories.contains(category)
         val favoritesMatch = !favoritesOnly || img.isFavorite
-        val query = searchQuery.trim()
-        val searchMatch = if (query.isBlank()) {
-            true
-        } else {
-            val name = img.custom_name ?: ""
-            val speciesName = speciesMap[img.species_id]?.name_cn ?: ""
-            val datasetName = datasetMap[img.dataset_id]?.name ?: ""
-            name.contains(query) || speciesName.contains(query) || datasetName.contains(query)
-        }
+        val searchMatch = matchesGalleryQuery(
+            image = img,
+            species = speciesMap[img.species_id],
+            dataset = datasetMap[img.dataset_id],
+            query = searchQuery
+        )
         datasetMatch && categoryMatch && favoritesMatch && searchMatch
     }
     var page by remember { mutableStateOf(1) }
@@ -391,11 +435,13 @@ fun GalleryScreen(navController: NavController) {
         }
     }
 
-    LaunchedEffect(filteredImages, viewerIndex) {
-        if (viewerIndex != null && filteredImages.isEmpty()) {
-            viewerIndex = null
-        } else if (viewerIndex != null && viewerIndex!! >= filteredImages.size) {
-            viewerIndex = filteredImages.lastIndex
+    LaunchedEffect(filteredImages, viewerImageId) {
+        selectedImageIds = visibleSelectionIds(selectedImageIds, filteredImages)
+        if (viewerImageId != null && filteredImages.none { it.id == viewerImageId }) {
+            viewerImageId = null
+        }
+        if (deleteImageIds.isNotEmpty() && state.images.none { it.id in deleteImageIds }) {
+            deleteImageIds = emptySet()
         }
     }
 
@@ -457,6 +503,13 @@ fun GalleryScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(20.dp))
             AnimatedVisibility(visible = contentVisible, enter = enterUp) {
                 SectionHeader(title = "图片列表")
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { navController.navigate("review") },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("打开鉴定工作台")
             }
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -692,6 +745,42 @@ fun GalleryScreen(navController: NavController) {
                                 exportPreviewMode = ExportMode.FOLDER
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text("导出科研 CSV") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                if (exportImages.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+                                    return@DropdownMenuItem
+                                }
+                                pendingExportItems = buildExportItems(exportImages, speciesMap)
+                                csvExporter.launch("鉴定记录_${exportTimestamp()}.csv")
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出科研 Excel") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                if (exportImages.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+                                    return@DropdownMenuItem
+                                }
+                                pendingExportItems = buildExportItems(exportImages, speciesMap)
+                                excelExporter.launch("鉴定记录_${exportTimestamp()}.xlsx")
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出科研 PDF") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                if (exportImages.isEmpty()) {
+                                    scope.launch { snackbarHostState.showSnackbar("暂无可导出的图片") }
+                                    return@DropdownMenuItem
+                                }
+                                pendingExportItems = buildExportItems(exportImages, speciesMap)
+                                pdfExporter.launch("鉴定报告_${exportTimestamp()}.pdf")
+                            }
+                        )
                     }
                 }
                 IconButton(onClick = { viewMode = if (viewMode == "grid") "list" else "grid" }) {
@@ -817,7 +906,7 @@ fun GalleryScreen(navController: NavController) {
                                             if (selectionMode) {
                                                 toggleSelect()
                                             } else {
-                                                viewerIndex = rowIndex * 2 + colIndex
+                                                viewerImageId = img.id
                                             }
                                         },
                                         onDoubleClick = if (selectionMode) {
@@ -910,7 +999,7 @@ fun GalleryScreen(navController: NavController) {
                                     if (selectionMode) {
                                         toggleSelect()
                                     } else {
-                                        viewerIndex = index
+                                        viewerImageId = img.id
                                     }
                                 },
                                 onDoubleClick = if (selectionMode) {
@@ -1335,8 +1424,9 @@ fun GalleryScreen(navController: NavController) {
                     deleteImageIds = emptySet()
                     selectionMode = false
                     selectedImageIds = emptySet()
+                    viewerImageId = null
                     scope.launch {
-                        val removed = state.images.filter { it.id in ids }
+                        val removed = LocalAppStore.state.value.images.filter { it.id in ids }
                         LocalAppStore.update(context) { currentState ->
                             currentState.copy(images = currentState.images.filterNot { it.id in ids })
                         }
@@ -1359,8 +1449,21 @@ fun GalleryScreen(navController: NavController) {
         )
     }
 
-    val currentIndex = viewerIndex
-    if (currentIndex != null && filteredImages.isNotEmpty()) {
+    annotationTarget?.let { target ->
+        ImageAnnotationEditor(
+            image = target,
+            onDismiss = { annotationTarget = null },
+            onSave = { updated ->
+                scope.launch {
+                    LocalAppStore.updateImage(context, updated.id) { updated }
+                }
+            }
+        )
+    }
+
+    val currentId = viewerImageId
+    if (currentId != null && filteredImages.isNotEmpty()) {
+        val currentIndex = filteredImages.indexOfFirst { it.id == currentId }
         val safeIndex = currentIndex.coerceIn(0, filteredImages.lastIndex)
         val pagerState = rememberPagerState(
             initialPage = safeIndex,
@@ -1373,8 +1476,9 @@ fun GalleryScreen(navController: NavController) {
             }
         }
         LaunchedEffect(pagerState.currentPage) {
-            if (viewerIndex != pagerState.currentPage) {
-                viewerIndex = pagerState.currentPage
+            val pageId = filteredImages.getOrNull(pagerState.currentPage)?.id
+            if (pageId != null && viewerImageId != pageId) {
+                viewerImageId = pageId
             }
         }
         val activeIndex = pagerState.currentPage.coerceIn(0, filteredImages.lastIndex)
@@ -1386,7 +1490,7 @@ fun GalleryScreen(navController: NavController) {
         }
 
         Dialog(
-            onDismissRequest = { viewerIndex = null },
+            onDismissRequest = { viewerImageId = null },
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Box(
@@ -1401,7 +1505,7 @@ fun GalleryScreen(navController: NavController) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("图片浏览", style = MaterialTheme.typography.titleMedium)
-                        IconButton(onClick = { viewerIndex = null }) {
+                        IconButton(onClick = { viewerImageId = null }) {
                             Icon(Icons.Default.Close, contentDescription = null)
                         }
                     }
@@ -1431,13 +1535,34 @@ fun GalleryScreen(navController: NavController) {
                                     currentZoomFraction = zoomFraction
                                 }
                             }
-                            ZoomableAsyncImage(
-                                model = img.image_url,
-                                contentDescription = img.custom_name,
-                                modifier = Modifier.fillMaxSize(),
-                                state = zoomState,
-                                contentScale = ContentScale.Fit
-                            )
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                ZoomableAsyncImage(
+                                    model = img.image_url,
+                                    contentDescription = img.custom_name,
+                                    modifier = Modifier.fillMaxSize(),
+                                    state = zoomState,
+                                    contentScale = ContentScale.Fit
+                                )
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val stroke = androidx.compose.ui.graphics.Paint().apply {
+                                        color = androidx.compose.ui.graphics.Color(0xFFFFC107)
+                                        this.strokeWidth = 4f
+                                        style = androidx.compose.ui.graphics.PaintingStyle.Stroke
+                                    }
+                                    img.annotations.forEach { annotation ->
+                                        val startX = annotation.x.coerceIn(0f, 1f) * size.width
+                                        val startY = annotation.y.coerceIn(0f, 1f) * size.height
+                                        val endX = (annotation.endX ?: annotation.x).coerceIn(0f, 1f) * size.width
+                                        val endY = (annotation.endY ?: annotation.y).coerceIn(0f, 1f) * size.height
+                                        when (annotation.type) {
+                                            AnnotationType.POINT -> drawCircle(stroke.color, radius = 8f, center = androidx.compose.ui.geometry.Offset(startX, startY), style = androidx.compose.ui.graphics.drawscope.Fill)
+                                            AnnotationType.ARROW, AnnotationType.MEASUREMENT -> drawLine(stroke.color, androidx.compose.ui.geometry.Offset(startX, startY), androidx.compose.ui.geometry.Offset(endX, endY), strokeWidth = 4f)
+                                            AnnotationType.RECTANGLE -> drawRect(stroke.color, topLeft = androidx.compose.ui.geometry.Offset(startX, startY), size = androidx.compose.ui.geometry.Size(endX - startX, endY - startY), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4f))
+                                            AnnotationType.TEXT -> drawContext.canvas.nativeCanvas.drawText(annotation.text.orEmpty(), startX, startY, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.YELLOW; textSize = 32f })
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
@@ -1508,10 +1633,13 @@ fun GalleryScreen(navController: NavController) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("重命名")
                             }
+                            OutlinedButton(onClick = { annotationTarget = current }) {
+                                Text("标注")
+                            }
                             OutlinedButton(onClick = { deleteImageIds = setOf(current.id) }) {
                                 Text("删除")
                             }
-                            OutlinedButton(onClick = { viewerIndex = null }) {
+                            OutlinedButton(onClick = { viewerImageId = null }) {
                                 Text("关闭")
                             }
                         }
@@ -1581,4 +1709,20 @@ private enum class ExportMode {
     ZIP,
     WORD,
     FOLDER
+}
+
+private fun buildExportItems(
+    images: List<PlanktonImage>,
+    speciesMap: Map<String, com.dlovel.plankton.data.Species>
+): List<ExportService.ExportItem> = images.mapIndexed { index, image ->
+    ExportService.ExportItem(
+        source = image.image_url,
+        name = image.custom_name ?: "图片${index + 1}",
+        speciesName = speciesMap[image.species_id]?.name_cn,
+        speciesLatin = speciesMap[image.species_id]?.name_latin,
+        confidence = image.identificationConfidence,
+        reviewStatus = image.reviewStatus,
+        reviewNote = image.reviewNote,
+        createdAt = image.created_at
+    )
 }
