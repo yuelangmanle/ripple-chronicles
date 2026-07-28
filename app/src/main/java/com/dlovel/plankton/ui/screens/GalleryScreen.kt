@@ -42,13 +42,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import coil.imageLoader
@@ -114,6 +119,7 @@ fun GalleryScreen(navController: NavController) {
     val searchQuery = searchInput.text
     var suggestionsExpanded by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
+    var searchFieldWidthPx by remember { mutableStateOf(0) }
     var datasetFilterDialog by remember { mutableStateOf(false) }
     var categoryFilterDialog by remember { mutableStateOf(false) }
     var selectedDatasetIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -564,10 +570,10 @@ fun GalleryScreen(navController: NavController) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            ExposedDropdownMenuBox(
-                expanded = suggestionsExpanded && suggestions.isNotEmpty(),
-                onExpandedChange = { expanded -> suggestionsExpanded = expanded }
-            ) {
+            val density = LocalDensity.current
+            val suggestionOffsetY = with(density) { 56.dp.roundToPx() }
+            val suggestionWidth = with(density) { searchFieldWidthPx.toDp() }
+            Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = searchInput,
                     onValueChange = { nextValue ->
@@ -578,7 +584,7 @@ fun GalleryScreen(navController: NavController) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(searchFocusRequester)
-                        .menuAnchor(),
+                        .onSizeChanged { searchFieldWidthPx = it.width },
                     trailingIcon = if (searchQuery.isNotBlank()) {
                         {
                             IconButton(onClick = {
@@ -590,22 +596,35 @@ fun GalleryScreen(navController: NavController) {
                         }
                     } else null
                 )
-                ExposedDropdownMenu(
-                    expanded = suggestionsExpanded && suggestions.isNotEmpty(),
-                    onDismissRequest = { suggestionsExpanded = false }
-                ) {
-                    suggestions.forEach { suggestion ->
-                        DropdownMenuItem(
-                            text = { Text(suggestion) },
-                            onClick = {
-                                searchInput = textFieldValueAtEnd(suggestion)
-                                suggestionsExpanded = false
-                                scope.launch {
-                                    delay(50)
-                                    searchFocusRequester.requestFocus()
+                if (suggestionsExpanded && suggestions.isNotEmpty() && searchFieldWidthPx > 0) {
+                    Popup(
+                        alignment = Alignment.TopStart,
+                        offset = IntOffset(0, suggestionOffsetY),
+                        onDismissRequest = { suggestionsExpanded = false },
+                        properties = PopupProperties(focusable = false)
+                    ) {
+                        Card(
+                            modifier = Modifier
+                                .width(suggestionWidth)
+                                .heightIn(max = 280.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column {
+                                suggestions.forEach { suggestion ->
+                                    DropdownMenuItem(
+                                        text = { Text(suggestion) },
+                                        onClick = {
+                                            searchInput = textFieldValueAtEnd(suggestion)
+                                            suggestionsExpanded = false
+                                            scope.launch {
+                                                delay(50)
+                                                searchFocusRequester.requestFocus()
+                                            }
+                                        }
+                                    )
                                 }
                             }
-                        )
+                        }
                     }
                 }
             }

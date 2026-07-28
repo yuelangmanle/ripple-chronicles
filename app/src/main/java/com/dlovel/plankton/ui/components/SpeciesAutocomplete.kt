@@ -19,8 +19,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.dlovel.plankton.data.Species
 import com.dlovel.plankton.data.LocalAppStore
+import com.dlovel.plankton.util.synchronizeTextFieldValue
 import com.dlovel.plankton.util.textFieldValueAtEnd
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -42,9 +44,7 @@ fun SpeciesAutocomplete(
     val state by LocalAppStore.state.collectAsState()
 
     LaunchedEffect(initialValue) {
-        if (initialValue != query.text) {
-            query = textFieldValueAtEnd(initialValue)
-        }
+        query = synchronizeTextFieldValue(query, initialValue)
     }
 
     LaunchedEffect(query.text) {
@@ -102,7 +102,8 @@ fun SpeciesAutocomplete(
 
         if (showDropdown && results.isNotEmpty()) {
             Popup(
-                onDismissRequest = { showDropdown = false }
+                onDismissRequest = { showDropdown = false },
+                properties = PopupProperties(focusable = false)
             ) {
                 Card(
                     modifier = Modifier

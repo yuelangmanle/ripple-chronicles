@@ -32,8 +32,8 @@ android {
         applicationId "com.dlovel"
         minSdk 26
         targetSdk 34
-        versionCode 25
-        versionName "1.7.8"
+        versionCode 26
+        versionName "1.7.9"
 
         buildConfigField "String", "SUPABASE_URL", quoteBuildConfig(supabaseUrl)
         buildConfigField "String", "SUPABASE_ANON_KEY", quoteBuildConfig(supabaseAnonKey)

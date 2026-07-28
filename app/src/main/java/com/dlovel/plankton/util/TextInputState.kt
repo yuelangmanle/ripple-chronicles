@@ -8,3 +8,7 @@ fun textFieldValueAtEnd(text: String): TextFieldValue = TextFieldValue(
     text = text,
     selection = TextRange(text.length)
 )
+
+/** Keeps a user's active cursor when state only echoes the same text back. */
+fun synchronizeTextFieldValue(current: TextFieldValue, externalText: String): TextFieldValue =
+    if (current.text == externalText) current else textFieldValueAtEnd(externalText)
